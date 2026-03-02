@@ -1,8 +1,5 @@
-const GROQ_ENDPOINT = 'https://api.groq.com/openai/v1/chat/completions'
-const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions'
-
-function getGroqKey(): string | undefined { return process.env.GROQ_API_KEY }
-function getOpenRouterKey(): string | undefined { return process.env.OPENROUTER_API_KEY }
+// Local LLM Server using Ollama (runs locally, no API keys needed)
+const OLLAMA_ENDPOINT = 'http://localhost:11434/api/generate'
 
 interface LLMOptions {
     temperature?: number;
@@ -16,85 +13,65 @@ export async function callLLM(
     userPrompt: string,
     options?: LLMOptions
 ) {
-    const { temperature = 0.1, maxTokens = 4096, responseFormat = { type: 'json_object' } } = options || {}
-    const groqKey = getGroqKey()
-    const orKey = getOpenRouterKey()
+    const { temperature = 0.1, maxTokens = 1500, model = 'mistral' } = options || {}
 
-    let lastError: any = null
+    try {
+        const response = await fetch(OLLAMA_ENDPOINT, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                model: model,
+                prompt: `System: ${systemPrompt}\n\nUser: ${userPrompt}`,
+                temperature: temperature,
+                max_tokens: maxTokens,
+                stream: false,
+            }),
+        })
 
-    // 1. Attempt Groq (Primary)
-    if (groqKey) {
-        try {
-            const response = await fetch(GROQ_ENDPOINT, {
-                method: 'POST',
-                headers: {
-                    Authorization: `Bearer ${groqKey}`,
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    model: 'llama-3.3-70b-versatile',
-                    messages: [
-                        { role: 'system', content: systemPrompt },
-                        { role: 'user', content: userPrompt },
-                    ],
-                    temperature,
-                    max_tokens: maxTokens,
-                    response_format: responseFormat,
-                }),
-            })
-
-            if (response.ok) {
-                const data = await response.json()
-                const content = data?.choices?.[0]?.message?.content
-                if (content) return { data: JSON.parse(content), provider: 'groq' }
-            } else {
-                const err = await response.json().catch(() => ({}))
-                lastError = { provider: 'groq', status: response.status, message: err?.error?.message || response.statusText }
-            }
-        } catch (e: any) {
-            lastError = { provider: 'groq', message: e.message }
+        if (!response.ok) {
+            throw new Error(`Ollama error: ${response.status} ${response.statusText}`)
         }
-    }
 
-    // 2. Attempt OpenRouter (Fallback)
-    if (orKey) {
-        try {
-            const response = await fetch(OPENROUTER_ENDPOINT, {
-                method: 'POST',
-                headers: {
-                    Authorization: `Bearer ${orKey}`,
-                    'Content-Type': 'application/json',
-                    'HTTP-Referer': 'https://system2ml.ai',
-                    'X-Title': 'System2ML Architect',
-                },
-                body: JSON.stringify({
-                    model: 'meta-llama/llama-3.3-70b-instruct',
-                    messages: [
-                        { role: 'system', content: systemPrompt },
-                        { role: 'user', content: userPrompt },
-                    ],
-                    temperature,
-                    max_tokens: maxTokens,
-                    response_format: responseFormat,
-                }),
-            })
-
-            if (response.ok) {
-                const data = await response.json()
-                const content = data?.choices?.[0]?.message?.content
-                if (content) return { data: JSON.parse(content), provider: 'openrouter' }
-            } else {
-                const err = await response.json().catch(() => ({}))
-                lastError = { provider: 'openrouter', status: response.status, message: err?.error?.message || response.statusText }
-            }
-        } catch (e: any) {
-            lastError = { provider: 'openrouter', message: e.message }
+        const data = await response.json()
+        const content = data?.response?.trim()
+        
+        if (!content) {
+            throw new Error('Empty response from Ollama')
         }
-    }
 
-    throw new Error(
-        lastError
-            ? `AI synthesis failed. Last error (${lastError.provider}): ${lastError.message}`
-            : 'No AI providers (Groq/OpenRouter) are configured.'
-    )
+        // Try to parse JSON from the response
+        try {
+            // Sometimes the model returns JSON directly, sometimes wrapped in text
+            const parsed = JSON.parse(content)
+            return { data: parsed, provider: 'ollama' }
+        } catch {
+            // If not JSON, try to extract JSON from the text
+            const jsonMatch = content.match(/\{[\s\S]*\}/)
+            if (jsonMatch) {
+                return { data: JSON.parse(jsonMatch[0]), provider: 'ollama' }
+            }
+            // Return as a simple response
+            return { data: { text: content }, provider: 'ollama' }
+        }
+
+    } catch (e: any) {
+        console.error('Ollama call failed:', e)
+        throw new Error(`Local LLM failed: ${e.message}. Make sure Ollama is running with 'ollama serve'`)
+    }
+}
+
+export async function checkOllamaStatus(): Promise<{ available: boolean; models: string[] }> {
+    try {
+        const response = await fetch('http://localhost:11434/api/tags')
+        if (response.ok) {
+            const data = await response.json()
+            const models = data.models?.map((m: any) => m.name) || []
+            return { available: true, models }
+        }
+    } catch (e) {
+        console.error('Ollama not available:', e)
+    }
+    return { available: false, models: [] }
 }

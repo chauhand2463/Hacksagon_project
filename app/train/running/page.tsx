@@ -4,13 +4,13 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { DashboardLayout } from '@/components/layout/dashboard-layout'
 import { useDesign } from '@/hooks/use-design'
-import { getTrainingStatusByProject, stopTrainingProject, TrainingStatusResponse, getColabJob } from '@/lib/api'
+import { getTrainingStatusByProject, stopTrainingProject, TrainingStatusResponse, getColabJob, getGPUStatus, executeRealTraining } from '@/lib/api'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import {
-  CheckCircle, AlertTriangle, DollarSign, Leaf, Clock, Loader2, XCircle, ExternalLink, Cpu
+  CheckCircle, AlertTriangle, DollarSign, Leaf, Clock, Loader2, XCircle, ExternalLink, Cpu, Zap
 } from 'lucide-react'
 
 export default function TrainRunningPage() {

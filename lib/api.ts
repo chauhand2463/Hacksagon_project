@@ -1112,7 +1112,7 @@ export interface ColabJobResponse {
 }
 
 export async function createColabTraining(request: ColabTrainingRequest): Promise<ColabJobResponse> {
-  const response = await fetch('/api/training/colab/create', {
+  const response = await fetch('/api/training/colab/download', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request),
@@ -1145,6 +1145,64 @@ export async function getColabNotebook(jobId: string): Promise<{ notebook: any }
     throw new Error(error.error || error.detail || 'Failed to get notebook');
   }
 
+  return response.json();
+}
+
+// Real Training Execution API
+export interface RealTrainingRequest {
+  dataset_profile: {
+    name: string;
+    type: string;
+    rows: number;
+    columns: number;
+    features: number;
+    has_labels: boolean;
+    label_type: string;
+  };
+  training_target: {
+    base_model: string;
+    method: 'lora' | 'qlora' | 'full_ft';
+    max_budget_usd: number;
+    gpu_allowed: boolean;
+  };
+  constraints: {
+    max_cost_usd: number;
+    max_carbon_kg: number;
+    max_latency_ms: number;
+    compliance_level?: string;
+    deployment?: string;
+  };
+  execution_mode?: 'auto' | 'local' | 'modal' | 'colab';
+}
+
+export interface RealTrainingJob {
+  job_id: string;
+  status: string;
+  execution_mode: string;
+  gpu_available: boolean;
+  gpu_info?: { name: string; memory: string };
+  config: any;
+  logs: string[];
+  results?: any;
+}
+
+export async function executeRealTraining(request: RealTrainingRequest): Promise<RealTrainingJob> {
+  const response = await fetch('/api/training/execute', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: response.statusText }));
+    throw new Error(error.error || error.detail || 'Failed to execute training');
+  }
+
+  return response.json();
+}
+
+export async function getGPUStatus(): Promise<{ available: boolean; name?: string; memory?: string }> {
+  const response = await fetch('/api/training/gpu-status');
   return response.json();
 }
 

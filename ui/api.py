@@ -1763,5 +1763,59 @@ def get_colab_notebook(job_id: str):
 
 if __name__ == "__main__":
     import uvicorn
-    # Enable reload=True for development to ensure changes are reflected
     uvicorn.run("ui.api:app", host="0.0.0.0", port=8000, reload=True)
+
+
+# ============================================
+# REAL TRAINING EXECUTION ENDPOINTS
+# ============================================
+
+class RealTrainingRequest(BaseModel):
+    dataset_profile: dict
+    training_target: dict
+    constraints: dict
+    execution_mode: str = "auto"
+
+
+@app.post("/api/training/execute")
+def execute_training(request: RealTrainingRequest):
+    """Execute real GPU training"""
+    try:
+        from agent.training_engine import execute_real_training
+        result = execute_real_training(
+            dataset_profile=request.dataset_profile,
+            training_target=request.training_target,
+            constraints=request.constraints,
+            execution_mode=request.execution_mode
+        )
+        return result
+    except Exception as e:
+        logger.error(f"Training execution error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/training/job/{job_id}")
+def get_training_job(job_id: str):
+    """Get training job status"""
+    try:
+        from agent.training_engine import training_engine
+        job = training_engine.get_job(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        return job
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Get job error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/training/gpu-status")
+def get_gpu_status():
+    """Check GPU availability"""
+    try:
+        from agent.training_engine import training_engine
+        gpu = training_engine.check_gpu_available()
+        return gpu
+    except Exception as e:
+        return {"available": False, "error": str(e)}
