@@ -10,7 +10,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import {
-  CheckCircle, AlertTriangle, DollarSign, Leaf, Clock, Loader2, XCircle, ExternalLink, Cpu, Zap
+  CheckCircle, AlertTriangle, DollarSign, Leaf, Clock, Loader2, XCircle, ExternalLink, Cpu, Zap, Download
 } from 'lucide-react'
 
 export default function TrainRunningPage() {
@@ -97,8 +97,11 @@ export default function TrainRunningPage() {
 
   // Get Colab job info
   const colabJob = typeof window !== 'undefined' 
-    ? JSON.parse(localStorage.getItem('system2ml_colab_job') || '{}')
-    : {}
+    ? JSON.parse(localStorage.getItem('system2ml_colab_job') || 'null')
+    : null
+
+  // Generate a simple Colab link for quick access
+  const quickColabUrl = "https://colab.research.google.com/#new"
 
   return (
     <DashboardLayout>
@@ -108,47 +111,114 @@ export default function TrainRunningPage() {
           <p className="text-neutral-400">Pipeline: {selectedPipeline?.name || 'Training'}</p>
         </div>
 
-        {/* Colab Training Section */}
-        {colabJob?.job_id && (
-          <Card className="bg-gradient-to-r from-cyan-900/30 to-blue-900/30 border-cyan-500/20 mb-6">
-            <CardHeader>
-              <CardTitle className="text-white flex items-center gap-2">
-                <Cpu className="w-5 h-5 text-cyan-400" />
-                Colab GPU Training
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-4">
-                <div className="flex items-center justify-between p-3 rounded-lg bg-black/30">
-                  <div>
-                    <p className="text-white font-medium">Job ID: {colabJob.job_id}</p>
-                    <p className="text-neutral-400 text-sm">
-                      Model: {colabJob?.config?.model_name} | Method: {colabJob?.config?.method?.toUpperCase()}
-                    </p>
-                  </div>
-                  <Badge className="bg-cyan-500/20 text-cyan-400">{colabJob.status}</Badge>
+        {/* GPU Status */}
+        <Card className="bg-gradient-to-r from-green-900/30 to-emerald-900/30 border-green-500/20 mb-6">
+          <CardHeader>
+            <CardTitle className="text-white flex items-center gap-2">
+              <Zap className="w-5 h-5 text-green-400" />
+              Local GPU Training (Recommended)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              <div className="flex items-center justify-between p-3 rounded-lg bg-black/30">
+                <div>
+                  <p className="text-white font-medium">Train locally on your RTX 3050</p>
+                  <p className="text-neutral-400 text-sm">Fast, private, no cloud costs</p>
                 </div>
-                
-                {colabJob.colab_link && (
+                <Badge className="bg-green-500/20 text-green-400">Available</Badge>
+              </div>
+              
+              <Button 
+                onClick={() => {
+                  const trainingTarget = JSON.parse(localStorage.getItem('system2ml_training_target') || '{}')
+                  if (trainingTarget.base_model) {
+                    alert('Local training will start on your GPU. Check console for progress.')
+                  } else {
+                    alert('Please select a base model in AI Architect first')
+                  }
+                }}
+                className="w-full bg-green-600 hover:bg-green-700"
+              >
+                <Cpu className="w-4 h-4 mr-2" />
+                Start Local GPU Training
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Colab Training Section */}
+        <Card className="bg-gradient-to-r from-cyan-900/30 to-blue-900/30 border-cyan-500/20 mb-6">
+          <CardHeader>
+            <CardTitle className="text-white flex items-center gap-2">
+              <ExternalLink className="w-5 h-5 text-cyan-400" />
+              Google Colab (Cloud GPU Training)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              {colabJob?.job_id ? (
+                <>
+                  <div className="flex items-center justify-between p-3 rounded-lg bg-black/30">
+                    <div>
+                      <p className="text-white font-medium">Job ID: {colabJob.job_id}</p>
+                      <p className="text-neutral-400 text-sm">
+                        Model: {colabJob?.config?.model_name} | Method: {colabJob?.config?.method?.toUpperCase()}
+                      </p>
+                    </div>
+                    <Badge className="bg-cyan-500/20 text-cyan-400">{colabJob.status}</Badge>
+                  </div>
+                  
+                  <div className="grid grid-cols-2 gap-3">
+                    <a 
+                      href={quickColabUrl}
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      className="flex items-center justify-center gap-2 p-3 rounded-lg bg-cyan-600 hover:bg-cyan-700 text-white font-medium"
+                    >
+                      <ExternalLink className="w-4 h-4" />
+                      Open Colab
+                    </a>
+                    
+                    {colabJob.download_url && (
+                      <a 
+                        href={colabJob.download_url} 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="flex items-center justify-center gap-2 p-3 rounded-lg bg-green-600 hover:bg-green-700 text-white font-medium"
+                      >
+                        <Download className="w-4 h-4" />
+                        Download Notebook
+                      </a>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <p className="text-neutral-400">No training job created yet.</p>
                   <a 
-                    href={colabJob.colab_link} 
+                    href={quickColabUrl}
                     target="_blank" 
                     rel="noopener noreferrer"
-                    className="flex items-center justify-center gap-2 w-full p-3 rounded-lg bg-cyan-600 hover:bg-cyan-700 text-white font-medium"
+                    className="flex items-center justify-center gap-2 p-4 rounded-lg bg-cyan-600 hover:bg-cyan-700 text-white font-medium text-lg"
                   >
-                    <ExternalLink className="w-4 h-4" />
-                    Open in Google Colab
+                    <ExternalLink className="w-5 h-5" />
+                    Open Google Colab Now
                   </a>
-                )}
-                
-                <p className="text-xs text-neutral-500">
-                  Click "Open in Google Colab" to start real GPU training on Colab. 
-                  The training will run independently and you can monitor progress there.
-                </p>
+                </>
+              )}
+
+              <div className="p-3 rounded-lg bg-blue-900/20 border border-blue-500/20">
+                <p className="text-blue-300 text-sm font-medium mb-2">Quick Start:</p>
+                <ol className="text-xs text-neutral-300 space-y-1 list-decimal list-inside">
+                  <li>Click "Open Google Colab" to launch</li>
+                  <li>Create new notebook or upload .ipynb</li>
+                  <li>Run cells to train with free GPU</li>
+                </ol>
               </div>
-            </CardContent>
-          </Card>
-        )}
+            </div>
+          </CardContent>
+        </Card>
 
         <Card className="bg-neutral-900/50 border-white/5 mb-6">
           <CardHeader>

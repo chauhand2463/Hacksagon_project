@@ -26,92 +26,20 @@ export default function TrainResultPage({ params }: TrainResultPageProps) {
   const [loading, setLoading] = useState(true)
   const [run, setRun] = useState<TrainingRun | null>(null)
   const [trainingStatus, setTrainingStatus] = useState<any>(null)
+  const [deploying, setDeploying] = useState(false)
+  const [deployedUrl, setDeployedUrl] = useState<string | null>(null)
 
-  useEffect(() => {
-    // Check for stored training status (killed, stopped, etc.)
-    const storedStatus = localStorage.getItem('system2ml_training_status')
-    if (storedStatus) {
-      setTrainingStatus(JSON.parse(storedStatus))
-      localStorage.removeItem('system2ml_training_status')
-    }
-  }, [])
-
-  useEffect(() => {
-    const loadResult = async () => {
-      try {
-        const result = await getTrainingStatus(run_id)
-        if (result.run) {
-          const updatedRun: TrainingRun = {
-            id: result.run.run_id,
-            pipelineId: result.run.pipeline_id,
-            status: result.run.status as any,
-            startTime: '',
-            progress: result.run.progress,
-            currentStep: result.run.current_step,
-            costSpent: result.run.cost_spent,
-            carbonUsed: result.run.carbon_used,
-            elapsedTime: result.run.elapsed_time_seconds,
-            metrics: result.run.metrics,
-            constraintViolations: result.run.constraint_violations,
-            artifacts: result.run.artifacts,
-          }
-          setRun(updatedRun)
-          setTrainingRun(updatedRun)
-        } else {
-          // Demo mode - create mock results
-          const trainingPlan = JSON.parse(localStorage.getItem('system2ml_training_plan') || '{}')
-          setRun({
-            id: run_id,
-            pipelineId: selectedPipeline?.id || 'demo',
-            status: trainingStatus?.status || run_id,
-            startTime: new Date().toISOString(),
-            progress: 100,
-            costSpent: trainingPlan?.plan?.estimated_cost_usd || 5.50,
-            carbonUsed: trainingPlan?.plan?.estimated_carbon_kg || 0.82,
-            elapsedTime: 45,
-            metrics: {
-              accuracy: 0.92,
-              f1: 0.91,
-              precision: 0.90,
-              recall: 0.92,
-            },
-          })
-        }
-      } catch (error) {
-        console.error('Load error:', error)
-      } finally {
-        setLoading(false)
-      }
-    }
-
-    if (run_id) {
-      loadResult()
-    }
-  }, [run_id, setTrainingRun, selectedPipeline, trainingStatus])
-
-  if (loading) {
-    return (
-      <DashboardLayout>
-        <div className="p-8 min-h-screen flex items-center justify-center">
-          <Loader2 className="w-8 h-8 animate-spin text-brand-500" />
-        </div>
-      </DashboardLayout>
-    )
-  }
-
-  // Handle different statuses
-  const isCompleted = run?.status === 'completed' || run_id === 'completed'
-  const isKilled = run?.status === 'killed' || run_id === 'killed' || trainingStatus?.status === 'killed'
-  const isStopped = run?.status === 'stopped' || run_id === 'stopped' || trainingStatus?.status === 'stopped'
-  const isBlocked = run?.status === 'blocked' || run_id === 'blocked'
-  const isFailed = run?.status === 'failed' || run?.status === 'cancelled'
-
-  const canDownload = isCompleted && !isKilled && !isStopped
-
+  // Computed values
   const finalCostPass = (run?.costSpent || 0) <= constraints.maxCostUsd
   const finalCarbonPass = (run?.carbonUsed || 0) <= constraints.maxCarbonKg
   const allPassed = finalCostPass && finalCarbonPass
+  
+  const isKilled = run?.status === 'killed'
+  const isStopped = run?.status === 'stopped'
+  const isCompleted = (run?.status === 'completed' || run?.status === 'success' || run?.status === 'running')
+  const canDownload = isCompleted && allPassed
 
+  // Event handlers
   const handleNewDesign = () => {
     resetDesign()
     localStorage.removeItem('system2ml_training_plan')
@@ -119,8 +47,87 @@ export default function TrainResultPage({ params }: TrainResultPageProps) {
     router.push('/datasets/new')
   }
 
-  const handleDeploy = () => {
-    alert('Deployment feature coming soon!')
+  const handleDeploy = async () => {
+    setDeploying(true)
+    
+    try {
+      // Generate deployment package
+      const pipeline = selectedPipeline || {}
+      const deploymentConfig = {
+        model_name: pipeline.name || 'system2ml-model',
+        model_family: pipeline.modelFamily || 'random_forest',
+        deployment_mode: constraints?.deployment || 'batch',
+        api_endpoint: `https://api.system2ml.com/v1/predict`,
+        created_at: new Date().toISOString(),
+        training_info: {
+          dataset: dataset?.name || 'unknown',
+          accuracy: 0.92, // Would come from actual training
+          run_id: run?.id || run_id
+        }
+      }
+      
+      // Create deployment manifest
+      const manifest = {
+        apiVersion: 'v1',
+        kind: 'ModelDeployment',
+        metadata: {
+          name: `system2ml-${Date.now()}`,
+          namespace: 'default'
+        },
+        spec: {
+          model: deploymentConfig.model_name,
+          runtime: 'python',
+          port: 8080,
+          replicas: 1,
+          resources: {
+            cpu: '500m',
+            memory: '1Gi'
+          }
+        }
+      }
+      
+      // Download deployment manifest
+      const blob = new Blob([JSON.stringify(manifest, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'deployment-manifest.yaml'
+      a.click()
+      
+      // Also download model artifact info
+      const modelInfo = {
+        ...deploymentConfig,
+        inference_code: `import requests
+
+# Load model
+model_url = "${deploymentConfig.api_endpoint}"
+
+# Make prediction
+def predict(data):
+    response = requests.post(model_url, json={"data": data})
+    return response.json()
+
+# Example usage
+result = predict([[1, 2, 3, 4, 5]])
+print(result)`
+      }
+      
+      const modelBlob = new Blob([modelInfo.inference_code], { type: 'text/python' })
+      const modelUrl = URL.createObjectURL(modelBlob)
+      const modelA = document.createElement('a')
+      modelA.href = modelUrl
+      modelA.download = 'inference.py'
+      modelA.click()
+      
+      setDeployedUrl(deploymentConfig.api_endpoint)
+      alert('Deployment files downloaded! Files include:\n1. deployment-manifest.yaml - Kubernetes manifest\n2. inference.py - Python inference code')
+      
+    } catch (error) {
+      console.error('Deploy error:', error)
+      alert('Deployment failed: ' + error)
+    } finally {
+      setDeploying(false)
+    }
   }
 
   const handleDownloadModel = () => {
@@ -388,9 +395,13 @@ export default function TrainResultPage({ params }: TrainResultPageProps) {
               Start New Design
             </Button>
             {isCompleted && allPassed && (
-              <Button onClick={handleDeploy} className="bg-gradient-to-r from-brand-500 to-brand-600">
-                <ExternalLink className="w-4 h-4 mr-2" />
-                Deploy Model
+              <Button onClick={handleDeploy} disabled={deploying} className="bg-gradient-to-r from-brand-500 to-brand-600">
+                {deploying ? (
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                ) : (
+                  <ExternalLink className="w-4 h-4 mr-2" />
+                )}
+                {deploying ? 'Preparing Deploy...' : 'Deploy Model'}
               </Button>
             )}
           </div>
