@@ -28,7 +28,7 @@ export default function DesignReviewPage() {
   const [validated, setValidated] = useState(false)
 
   useEffect(() => {
-    if (!canProceedToDesign) {
+    if (!canProceedToDesign()) {
       router.push('/datasets/new')
     }
   }, [canProceedToDesign, router])

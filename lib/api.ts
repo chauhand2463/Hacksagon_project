@@ -638,7 +638,7 @@ export async function startTraining(request: TrainingRequest): Promise<{ run_id:
     return { run_id: '', status: 'error' };
   }
   try {
-    const response = await fetch(`${API_BASE}/api/training/start`, {
+    const response = await fetch(`${API_BASE}/api/training/run/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request),
@@ -654,7 +654,7 @@ export async function getTrainingStatus(runId: string): Promise<{ run: TrainingR
     return { run: { run_id: runId, pipeline_id: '', status: 'failed', progress: 0, cost_spent: 0, carbon_used: 0, elapsed_time_seconds: 0 } };
   }
   try {
-    const response = await fetch(`${API_BASE}/api/training/${runId}`);
+    const response = await fetch(`${API_BASE}/api/training/run/${runId}`);
     return response.json();
   } catch {
     return { run: { run_id: runId, pipeline_id: '', status: 'failed', progress: 0, cost_spent: 0, carbon_used: 0, elapsed_time_seconds: 0 } };
@@ -664,7 +664,7 @@ export async function getTrainingStatus(runId: string): Promise<{ run: TrainingR
 export async function stopTraining(runId: string): Promise<{ status: string }> {
   if (!isApiConfigured()) return { status: 'error' };
   try {
-    const response = await fetch(`${API_BASE}/api/training/${runId}/stop`, {
+    const response = await fetch(`${API_BASE}/api/training/run/${runId}/stop`, {
       method: 'POST',
     });
     return response.json();

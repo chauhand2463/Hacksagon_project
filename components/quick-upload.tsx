@@ -5,6 +5,8 @@ import { Upload, Loader2, CheckCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import Link from 'next/link'
 
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+
 export function QuickDatasetUpload() {
   const [uploading, setUploading] = useState(false)
   const [uploadStatus, setUploadStatus] = useState<'idle' | 'success' | 'error'>('idle')
@@ -17,7 +19,7 @@ export function QuickDatasetUpload() {
     setUploadStatus('idle')
     
     try {
-      const profileRes = await fetch('http://127.0.0.1:8000/api/datasets/profile', {
+      const profileRes = await fetch(`${API_BASE}/api/datasets/profile`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

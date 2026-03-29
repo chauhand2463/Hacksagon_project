@@ -35,7 +35,7 @@ export default function DesignConstraintsPage() {
   })
 
   useEffect(() => {
-    if (!canProceedToDesign) {
+    if (!canProceedToDesign()) {
       router.push('/datasets/new')
     }
   }, [canProceedToDesign, router])

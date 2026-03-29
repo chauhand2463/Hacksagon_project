@@ -27,7 +27,7 @@ export default function DesignResultsPage() {
   const [validating, setValidating] = useState(false)
 
   useEffect(() => {
-    if (!canProceedToDesign) {
+    if (!canProceedToDesign()) {
       router.push('/datasets/new')
     }
   }, [canProceedToDesign, router])

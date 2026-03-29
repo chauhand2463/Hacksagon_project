@@ -2,7 +2,6 @@ import type { Metadata } from 'next'
 import { Geist, Geist_Mono } from 'next/font/google'
 import { Analytics } from '@vercel/analytics/next'
 import { Providers } from '@/components/providers'
-import { RouteGuard } from '@/components/route-guard'
 import './globals.css'
 
 const _geist = Geist({ subsets: ["latin"] });
@@ -40,9 +39,7 @@ export default function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <body className="font-sans antialiased bg-black text-white">
         <Providers>
-          <RouteGuard>
-            {children}
-          </RouteGuard>
+          {children}
         </Providers>
         <Analytics />
       </body>

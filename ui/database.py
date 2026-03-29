@@ -1,22 +1,28 @@
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 import sqlite3
 import json
 import hashlib
 import secrets
+import os
 from datetime import datetime, timedelta
 from typing import Optional
 from dataclasses import dataclass, asdict
 
 DB_PATH = "system2ml.db"
 
+
 def hash_password(password: str) -> str:
-    return hashlib.sha256(password.encode()).hexdigest()
+    salt = os.environ.get("PASSWORD_SALT", "system2ml-default-salt-change-in-production")
+    return hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 100000).hex()
+
 
 def verify_password(password: str, hashed: str) -> bool:
     return hash_password(password) == hashed
+
 
 def generate_token() -> str:
     return secrets.token_urlsafe(32)
@@ -25,8 +31,8 @@ def generate_token() -> str:
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    
-    c.execute('''
+
+    c.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             email TEXT UNIQUE NOT NULL,
@@ -38,9 +44,9 @@ def init_db():
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
-    ''')
-    
-    c.execute('''
+    """)
+
+    c.execute("""
         CREATE TABLE IF NOT EXISTS sessions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
@@ -49,9 +55,9 @@ def init_db():
             created_at TEXT NOT NULL,
             FOREIGN KEY (user_id) REFERENCES users(id)
         )
-    ''')
-    
-    c.execute('''
+    """)
+
+    c.execute("""
         CREATE TABLE IF NOT EXISTS pipelines (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
@@ -65,9 +71,9 @@ def init_db():
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
-    ''')
-    
-    c.execute('''
+    """)
+
+    c.execute("""
         CREATE TABLE IF NOT EXISTS pipeline_designs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             pipeline_id TEXT NOT NULL,
@@ -84,9 +90,9 @@ def init_db():
             score REAL,
             FOREIGN KEY (pipeline_id) REFERENCES pipelines(id)
         )
-    ''')
-    
-    c.execute('''
+    """)
+
+    c.execute("""
         CREATE TABLE IF NOT EXISTS runs (
             id TEXT PRIMARY KEY,
             pipeline_id TEXT NOT NULL,
@@ -98,9 +104,9 @@ def init_db():
             error_message TEXT,
             FOREIGN KEY (pipeline_id) REFERENCES pipelines(id)
         )
-    ''')
-    
-    c.execute('''
+    """)
+
+    c.execute("""
         CREATE TABLE IF NOT EXISTS failures (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             pipeline_id TEXT,
@@ -113,9 +119,9 @@ def init_db():
             is_resolved INTEGER DEFAULT 0,
             created_at TEXT NOT NULL
         )
-    ''')
-    
-    c.execute('''
+    """)
+
+    c.execute("""
         CREATE TABLE IF NOT EXISTS activities (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             type TEXT NOT NULL,
@@ -125,8 +131,8 @@ def init_db():
             severity TEXT DEFAULT 'low',
             created_at TEXT NOT NULL
         )
-    ''')
-    
+    """)
+
     conn.commit()
     conn.close()
     print(f"[DB] Initialized database at {DB_PATH}")
@@ -139,47 +145,69 @@ def get_db():
 @dataclass
 class PipelineStore:
     @staticmethod
-    def create(pipeline_id: str, name: str, data_type: str, objective: str, 
-               constraints: dict, deployment: str, retraining: str) -> str:
+    def create(
+        pipeline_id: str,
+        name: str,
+        data_type: str,
+        objective: str,
+        constraints: dict,
+        deployment: str,
+        retraining: str,
+    ) -> str:
         conn = get_db()
         c = conn.cursor()
         now = datetime.utcnow().isoformat()
-        
-        c.execute('''
+
+        c.execute(
+            """
             INSERT INTO pipelines (id, name, data_type, objective, constraints, deployment, retraining, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (pipeline_id, name, data_type, objective, json.dumps(constraints), deployment, retraining, now, now))
-        
+        """,
+            (
+                pipeline_id,
+                name,
+                data_type,
+                objective,
+                json.dumps(constraints),
+                deployment,
+                retraining,
+                now,
+                now,
+            ),
+        )
+
         conn.commit()
         conn.close()
         return pipeline_id
-    
+
     @staticmethod
     def get_all():
         conn = get_db()
         c = conn.cursor()
-        c.execute('SELECT * FROM pipelines ORDER BY created_at DESC')
+        c.execute("SELECT * FROM pipelines ORDER BY created_at DESC")
         rows = c.fetchall()
         conn.close()
         return [dict(zip([col[0] for col in c.description], row)) for row in rows]
-    
+
     @staticmethod
     def get_by_id(pipeline_id: str):
         conn = get_db()
         c = conn.cursor()
-        c.execute('SELECT * FROM pipelines WHERE id = ?', (pipeline_id,))
+        c.execute("SELECT * FROM pipelines WHERE id = ?", (pipeline_id,))
         row = c.fetchone()
         conn.close()
         if row:
             return dict(zip([col[0] for col in c.description], row))
         return None
-    
+
     @staticmethod
     def update_status(pipeline_id: str, status: str):
         conn = get_db()
         c = conn.cursor()
-        c.execute('UPDATE pipelines SET status = ?, updated_at = ? WHERE id = ?', 
-                  (status, datetime.utcnow().isoformat(), pipeline_id))
+        c.execute(
+            "UPDATE pipelines SET status = ?, updated_at = ? WHERE id = ?",
+            (status, datetime.utcnow().isoformat(), pipeline_id),
+        )
         conn.commit()
         conn.close()
 
@@ -190,29 +218,40 @@ class DesignStore:
     def create(pipeline_id: str, design: dict, rank: int):
         conn = get_db()
         c = conn.cursor()
-        
-        c.execute('''
+
+        c.execute(
+            """
             INSERT INTO pipeline_designs (pipeline_id, rank, model, model_family, estimated_accuracy, 
                 estimated_cost, estimated_carbon, estimated_latency, meets_constraints, 
                 explanation, pipeline_spec, score)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (
-            pipeline_id, rank, design.get('model'), design.get('model_family'),
-            design.get('estimated_accuracy'), design.get('estimated_cost'),
-            design.get('estimated_carbon'), design.get('estimated_latency'),
-            1 if design.get('meets_constraints') else 0,
-            design.get('explanation'), json.dumps(design.get('pipeline_spec', {})),
-            design.get('score', 0)
-        ))
-        
+        """,
+            (
+                pipeline_id,
+                rank,
+                design.get("model"),
+                design.get("model_family"),
+                design.get("estimated_accuracy"),
+                design.get("estimated_cost"),
+                design.get("estimated_carbon"),
+                design.get("estimated_latency"),
+                1 if design.get("meets_constraints") else 0,
+                design.get("explanation"),
+                json.dumps(design.get("pipeline_spec", {})),
+                design.get("score", 0),
+            ),
+        )
+
         conn.commit()
         conn.close()
-    
+
     @staticmethod
     def get_by_pipeline(pipeline_id: str):
         conn = get_db()
         c = conn.cursor()
-        c.execute('SELECT * FROM pipeline_designs WHERE pipeline_id = ? ORDER BY rank', (pipeline_id,))
+        c.execute(
+            "SELECT * FROM pipeline_designs WHERE pipeline_id = ? ORDER BY rank", (pipeline_id,)
+        )
         rows = c.fetchall()
         conn.close()
         return [dict(zip([col[0] for col in c.description], row)) for row in rows]
@@ -225,69 +264,80 @@ class RunStore:
         conn = get_db()
         c = conn.cursor()
         now = datetime.utcnow().isoformat()
-        
-        c.execute('''
+
+        c.execute(
+            """
             INSERT INTO runs (id, pipeline_id, design_id, status, started_at)
             VALUES (?, ?, ?, ?, ?)
-        ''', (run_id, pipeline_id, design_id, 'running', now))
-        
+        """,
+            (run_id, pipeline_id, design_id, "running", now),
+        )
+
         conn.commit()
         conn.close()
         return run_id
-    
+
     @staticmethod
     def update(run_id: str, status: str, metrics: dict = None, error: str = None):
         conn = get_db()
         c = conn.cursor()
         now = datetime.utcnow().isoformat()
-        
-        c.execute('UPDATE runs SET status = ?, completed_at = ?, metrics = ?, error_message = ? WHERE id = ?',
-                  (status, now, json.dumps(metrics) if metrics else None, error, run_id))
-        
+
+        c.execute(
+            "UPDATE runs SET status = ?, completed_at = ?, metrics = ?, error_message = ? WHERE id = ?",
+            (status, now, json.dumps(metrics) if metrics else None, error, run_id),
+        )
+
         conn.commit()
         conn.close()
-    
+
     @staticmethod
     def get_all():
         conn = get_db()
         c = conn.cursor()
-        c.execute('''
+        c.execute("""
             SELECT r.*, p.name as pipeline_name 
             FROM runs r 
             JOIN pipelines p ON r.pipeline_id = p.id 
             ORDER BY r.started_at DESC
-        ''')
+        """)
         rows = c.fetchall()
         conn.close()
         return [dict(zip([col[0] for col in c.description], row)) for row in rows]
-    
+
     @staticmethod
     def get_by_id(run_id: str):
         conn = get_db()
         c = conn.cursor()
-        c.execute('''
+        c.execute(
+            """
             SELECT r.*, p.name as pipeline_name 
             FROM runs r 
             JOIN pipelines p ON r.pipeline_id = p.id 
             WHERE r.id = ?
-        ''', (run_id,))
+        """,
+            (run_id,),
+        )
         row = c.fetchone()
         conn.close()
         if row:
             return dict(zip([col[0] for col in c.description], row))
         return None
-    
+
     @staticmethod
     def get_by_pipeline(pipeline_id: str):
         conn = get_db()
         c = conn.cursor()
-        c.execute('''
+        c.execute(
+            """
             SELECT r.*, p.name as pipeline_name 
             FROM runs r 
             JOIN pipelines p ON r.pipeline_id = p.id 
             WHERE r.pipeline_id = ? 
             ORDER BY r.started_at DESC
-        ''', (pipeline_id,))
+        """,
+            (pipeline_id,),
+        )
         rows = c.fetchall()
         conn.close()
         return [dict(zip([col[0] for col in c.description], row)) for row in rows]
@@ -296,24 +346,29 @@ class RunStore:
 @dataclass
 class ActivityStore:
     @staticmethod
-    def log(type_: str, title: str, description: str = "", actor: str = "System", severity: str = "low"):
+    def log(
+        type_: str, title: str, description: str = "", actor: str = "System", severity: str = "low"
+    ):
         conn = get_db()
         c = conn.cursor()
         now = datetime.utcnow().isoformat()
-        
-        c.execute('''
+
+        c.execute(
+            """
             INSERT INTO activities (type, title, description, actor, severity, created_at)
             VALUES (?, ?, ?, ?, ?, ?)
-        ''', (type_, title, description, actor, severity, now))
-        
+        """,
+            (type_, title, description, actor, severity, now),
+        )
+
         conn.commit()
         conn.close()
-    
+
     @staticmethod
     def get_recent(limit: int = 20):
         conn = get_db()
         c = conn.cursor()
-        c.execute('SELECT * FROM activities ORDER BY created_at DESC LIMIT ?', (limit,))
+        c.execute("SELECT * FROM activities ORDER BY created_at DESC LIMIT ?", (limit,))
         rows = c.fetchall()
         conn.close()
         return [dict(zip([col[0] for col in c.description], row)) for row in rows]
@@ -322,25 +377,34 @@ class ActivityStore:
 @dataclass
 class FailureStore:
     @staticmethod
-    def create(pipeline_id: str, run_id: str, error_type: str, error_message: str, 
-               stack_trace: str = "", suggested_fix: str = ""):
+    def create(
+        pipeline_id: str,
+        run_id: str,
+        error_type: str,
+        error_message: str,
+        stack_trace: str = "",
+        suggested_fix: str = "",
+    ):
         conn = get_db()
         c = conn.cursor()
         now = datetime.utcnow().isoformat()
-        
-        c.execute('''
+
+        c.execute(
+            """
             INSERT INTO failures (pipeline_id, run_id, error_type, error_message, stack_trace, suggested_fix, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', (pipeline_id, run_id, error_type, error_message, stack_trace, suggested_fix, now))
-        
+        """,
+            (pipeline_id, run_id, error_type, error_message, stack_trace, suggested_fix, now),
+        )
+
         conn.commit()
         conn.close()
-    
+
     @staticmethod
     def get_all():
         conn = get_db()
         c = conn.cursor()
-        c.execute('SELECT * FROM failures ORDER BY created_at DESC')
+        c.execute("SELECT * FROM failures ORDER BY created_at DESC")
         rows = c.fetchall()
         conn.close()
         return [dict(zip([col[0] for col in c.description], row)) for row in rows]
@@ -349,77 +413,97 @@ class FailureStore:
 @dataclass
 class UserStore:
     @staticmethod
-    def create(email: str, password: str, name: str, provider: str = 'email') -> Optional[dict]:
+    def create(email: str, password: str, name: str, provider: str = "email") -> Optional[dict]:
         conn = get_db()
         c = conn.cursor()
         now = datetime.utcnow().isoformat()
-        
+
         try:
-            c.execute('''
+            c.execute(
+                """
                 INSERT INTO users (email, password_hash, name, provider, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?)
-            ''', (email, hash_password(password), name, provider, now, now))
-            
+            """,
+                (email, hash_password(password), name, provider, now, now),
+            )
+
             user_id = c.lastrowid
             conn.commit()
-            
-            c.execute('SELECT * FROM users WHERE id = ?', (user_id,))
+
+            c.execute("SELECT * FROM users WHERE id = ?", (user_id,))
             row = c.fetchone()
             conn.close()
-            
+
             if row:
                 user = dict(zip([col[0] for col in c.description], row))
-                del user['password_hash']
+                del user["password_hash"]
                 return user
             return None
         except sqlite3.IntegrityError:
             conn.close()
             return None
-    
+
     @staticmethod
     def get_by_email(email: str) -> Optional[dict]:
         conn = get_db()
         c = conn.cursor()
-        c.execute('SELECT * FROM users WHERE email = ?', (email,))
+        c.execute("SELECT * FROM users WHERE email = ?", (email,))
         row = c.fetchone()
         conn.close()
         if row:
             return dict(zip([col[0] for col in c.description], row))
         return None
-    
+
     @staticmethod
     def get_by_id(user_id: int) -> Optional[dict]:
         conn = get_db()
         c = conn.cursor()
-        c.execute('SELECT * FROM users WHERE id = ?', (user_id,))
+        c.execute("SELECT * FROM users WHERE id = ?", (user_id,))
         row = c.fetchone()
         conn.close()
         if row:
             user = dict(zip([col[0] for col in c.description], row))
-            del user['password_hash']
+            del user["password_hash"]
             return user
         return None
-    
+
     @staticmethod
     def verify_login(email: str, password: str) -> Optional[dict]:
         conn = get_db()
         c = conn.cursor()
-        c.execute('SELECT * FROM users WHERE email = ? AND provider = ?', (email, 'email'))
+        c.execute("SELECT * FROM users WHERE email = ? AND provider = ?", (email, "email"))
         row = c.fetchone()
         conn.close()
-        
+
         if row and verify_password(password, row[2]):
-            user = dict(zip(['id', 'email', 'password_hash', 'name', 'avatar', 'provider', 'is_active', 'created_at', 'updated_at'], row))
-            del user['password_hash']
+            user = dict(
+                zip(
+                    [
+                        "id",
+                        "email",
+                        "password_hash",
+                        "name",
+                        "avatar",
+                        "provider",
+                        "is_active",
+                        "created_at",
+                        "updated_at",
+                    ],
+                    row,
+                )
+            )
+            del user["password_hash"]
             return user
         return None
-    
+
     @staticmethod
     def update_avatar(user_id: int, avatar: str):
         conn = get_db()
         c = conn.cursor()
-        c.execute('UPDATE users SET avatar = ?, updated_at = ? WHERE id = ?', 
-                  (avatar, datetime.utcnow().isoformat(), user_id))
+        c.execute(
+            "UPDATE users SET avatar = ?, updated_at = ? WHERE id = ?",
+            (avatar, datetime.utcnow().isoformat(), user_id),
+        )
         conn.commit()
         conn.close()
 
@@ -432,49 +516,70 @@ class SessionStore:
         c = conn.cursor()
         now = datetime.utcnow()
         expires_at = (now + timedelta(days=expires_in_days)).isoformat()
-        
-        c.execute('''
+
+        c.execute(
+            """
             INSERT INTO sessions (user_id, token, expires_at, created_at)
             VALUES (?, ?, ?, ?)
-        ''', (user_id, token, expires_at, now.isoformat()))
-        
+        """,
+            (user_id, token, expires_at, now.isoformat()),
+        )
+
         conn.commit()
         conn.close()
         return token
-    
+
     @staticmethod
     def get_user_by_token(token: str) -> Optional[dict]:
         conn = get_db()
         c = conn.cursor()
-        
-        c.execute('''
+
+        c.execute(
+            """
             SELECT u.* FROM users u
             JOIN sessions s ON u.id = s.user_id
             WHERE s.token = ? AND s.expires_at > ?
-        ''', (token, datetime.utcnow().isoformat()))
-        
+        """,
+            (token, datetime.utcnow().isoformat()),
+        )
+
         row = c.fetchone()
         conn.close()
-        
+
         if row:
-            user = dict(zip(['id', 'email', 'password_hash', 'name', 'avatar', 'provider', 'is_active', 'created_at', 'updated_at'], row))
-            del user['password_hash']
+            user = dict(
+                zip(
+                    [
+                        "id",
+                        "email",
+                        "password_hash",
+                        "name",
+                        "avatar",
+                        "provider",
+                        "is_active",
+                        "created_at",
+                        "updated_at",
+                    ],
+                    row,
+                )
+            )
+            del user["password_hash"]
             return user
         return None
-    
+
     @staticmethod
     def delete(token: str):
         conn = get_db()
         c = conn.cursor()
-        c.execute('DELETE FROM sessions WHERE token = ?', (token,))
+        c.execute("DELETE FROM sessions WHERE token = ?", (token,))
         conn.commit()
         conn.close()
-    
+
     @staticmethod
     def delete_user_sessions(user_id: int):
         conn = get_db()
         c = conn.cursor()
-        c.execute('DELETE FROM sessions WHERE user_id = ?', (user_id,))
+        c.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
         conn.commit()
         conn.close()
 

@@ -8,6 +8,11 @@ import { Loader2, Shield, Activity, FileText, CheckCircle, Clock, ArrowRight, Za
 export default function GovernancePage() {
   const [activities, setActivities] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+  const [mounted, setMounted] = useState(false)
+
+  useEffect(() => {
+    setMounted(true)
+  }, [])
 
   useEffect(() => {
     async function loadData() {
@@ -51,7 +56,7 @@ export default function GovernancePage() {
     <DashboardLayout>
       <div className="p-8 min-h-screen">
         {/* Header */}
-        <div className="mb-8">
+        <div className={`mb-8 transition-all duration-700 ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4'}`}>
           <h1 className="text-3xl font-bold text-white mb-2">Governance</h1>
           <p className="text-neutral-400">Audit logs, compliance tracking, and policy management</p>
         </div>
@@ -63,12 +68,14 @@ export default function GovernancePage() {
             return (
               <div 
                 key={i}
-                className="relative group overflow-hidden rounded-2xl bg-neutral-900/50 backdrop-blur-xl border border-white/5 p-6 hover:border-brand-500/30 transition-all duration-500"
+                className={`relative group overflow-hidden rounded-2xl bg-neutral-900/50 backdrop-blur-xl border border-white/5 p-6 hover:border-brand-500/30 transition-all duration-500 hover:scale-[1.02] ${mounted ? 'opacity-100' : 'opacity-0'}`}
+                style={{ transitionDelay: `${i * 100}ms` }}
               >
                 <div className="absolute inset-0 bg-gradient-to-br from-brand-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
+                <div className="absolute top-0 right-0 w-24 h-24 bg-brand-500/10 rounded-full blur-2xl -translate-y-1/2 translate-x-1/2" />
                 <div className="relative">
                   <div className="flex items-center gap-3 mb-3">
-                    <div className={`w-10 h-10 rounded-xl ${stat.bg} flex items-center justify-center`}>
+                    <div className={`w-10 h-10 rounded-xl ${stat.bg} flex items-center justify-center group-hover:scale-110 transition-transform duration-300`}>
                       <Icon className={`w-5 h-5 ${stat.color}`} />
                     </div>
                   </div>

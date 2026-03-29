@@ -1,13 +1,14 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { DashboardLayout } from '@/components/layout/dashboard-layout'
 import { Button } from '@/components/ui/button'
-import { ChevronRight, Bell, Shield, Users, Zap, Check, Github, Globe } from 'lucide-react'
+import { ChevronRight, Bell, Shield, Users, Zap, Check, Github, Globe, Mail, Key, Trash2 } from 'lucide-react'
 import { useAuth } from '@/hooks/use-auth'
 
 export default function SettingsPage() {
   const { user } = useAuth()
+  const [mounted, setMounted] = useState(false)
   const [notifications, setNotifications] = useState({
     deployments: true,
     failures: true,
@@ -15,47 +16,52 @@ export default function SettingsPage() {
     reports: true,
   })
 
+  useEffect(() => {
+    setMounted(true)
+  }, [])
+
   return (
     <DashboardLayout>
       <div className="p-8 min-h-screen">
         {/* Header */}
-        <div className="mb-8">
+        <div className={`mb-8 transition-all duration-700 ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4'}`}>
           <h1 className="text-3xl font-bold text-white mb-2">Settings</h1>
           <p className="text-neutral-400">Manage your organization and preferences</p>
         </div>
 
         {/* Profile Card */}
-        <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-brand-500/20 via-purple-500/10 to-transparent border border-brand-500/20 p-6 mb-8">
+        <div className={`relative overflow-hidden rounded-2xl bg-gradient-to-br from-brand-500/20 via-purple-500/10 to-transparent border border-brand-500/20 p-6 mb-8 transition-all duration-700 delay-100 ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4'}`}>
           <div className="absolute inset-0 bg-[url('/grid.svg')] opacity-10" />
+          <div className="absolute top-0 right-0 w-64 h-64 bg-brand-500/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2" />
           <div className="relative flex items-center gap-6">
             <img
               src={user?.avatar || "https://api.dicebear.com/7.x/avataaars/svg?seed=Alex"}
               alt="Profile"
-              className="w-20 h-20 rounded-2xl border-4 border-white/10"
+              className="w-20 h-20 rounded-2xl border-4 border-white/10 shadow-lg"
             />
             <div>
-              <h2 className="text-xl font-bold text-white">{user?.name || 'User'}</h2>
-              <p className="text-neutral-400">{user?.email}</p>
-              <p className="text-brand-400 text-sm mt-1 capitalize">{user?.provider || 'Email'} account</p>
+              <h2 className="text-xl font-bold text-white">{user?.name || 'Demo User'}</h2>
+              <p className="text-neutral-400">{user?.email || 'demo@example.com'}</p>
+              <p className="text-brand-400 text-sm mt-1 capitalize">{user?.provider || 'Demo'} account</p>
             </div>
           </div>
         </div>
 
         <div className="max-w-2xl space-y-6">
           {/* Organization */}
-          <div className="rounded-2xl bg-neutral-900/50 backdrop-blur-xl border border-white/5 overflow-hidden">
+          <div className={`rounded-2xl bg-neutral-900/50 backdrop-blur-xl border border-white/5 overflow-hidden transition-all duration-700 delay-200 ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4'}`}>
             <div className="p-5 border-b border-white/5">
               <h2 className="text-lg font-bold text-white">Organization</h2>
             </div>
             <div className="divide-y divide-white/5">
               {[
-                { label: 'Organization Name', value: 'DataCorp ML', icon: Globe },
+                { label: 'Organization Name', value: 'System2ML Team', icon: Globe },
                 { label: 'Plan', value: 'Enterprise', icon: Zap },
                 { label: 'Billing', value: 'Manage payment', icon: Users },
               ].map((item, i) => (
-                <div key={i} className="p-5 flex items-center justify-between hover:bg-white/5 transition-all cursor-pointer group">
+                <div key={i} className="p-5 flex items-center justify-between hover:bg-white/5 transition-all cursor-pointer group hover:translate-x-2">
                   <div className="flex items-center gap-4">
-                    <div className="w-10 h-10 rounded-xl bg-neutral-800 flex items-center justify-center">
+                    <div className="w-10 h-10 rounded-xl bg-neutral-800 flex items-center justify-center group-hover:scale-110 transition-transform">
                       <item.icon className="w-5 h-5 text-neutral-400" />
                     </div>
                     <div>
@@ -70,32 +76,38 @@ export default function SettingsPage() {
           </div>
 
           {/* Connected Accounts */}
-          <div className="rounded-2xl bg-neutral-900/50 backdrop-blur-xl border border-white/5 overflow-hidden">
+          <div className={`rounded-2xl bg-neutral-900/50 backdrop-blur-xl border border-white/5 overflow-hidden transition-all duration-700 delay-300 ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4'}`}>
             <div className="p-5 border-b border-white/5">
               <h2 className="text-lg font-bold text-white">Connected Accounts</h2>
             </div>
-            <div className="p-5">
-              <div className="space-y-3">
-                <div className="flex items-center justify-between p-4 rounded-xl bg-neutral-800/50 border border-white/5">
+            <div className="p-5 space-y-3">
+              {[
+                { name: 'GitHub', connected: true, icon: Github },
+                { name: 'Google', connected: false, icon: Globe },
+                { name: 'Email', connected: true, icon: Mail },
+              ].map((account, i) => (
+                <div key={i} className="flex items-center justify-between p-4 rounded-xl bg-neutral-800/50 border border-white/5 hover:border-brand-500/30 transition-all group">
                   <div className="flex items-center gap-4">
-                    <div className="w-10 h-10 rounded-xl bg-white/10 flex items-center justify-center">
-                      <svg className="w-5 h-5" viewBox="0 0 24 24">
-                        <path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
-                      </svg>
+                    <div className="w-10 h-10 rounded-xl bg-white/10 flex items-center justify-center group-hover:scale-110 transition-transform">
+                      <account.icon className="w-5 h-5" />
                     </div>
                     <div>
-                      <p className="font-medium text-white">GitHub</p>
-                      <p className="text-sm text-neutral-500">Connected</p>
+                      <p className="font-medium text-white">{account.name}</p>
+                      <p className="text-sm text-neutral-500">{account.connected ? 'Connected' : 'Not connected'}</p>
                     </div>
                   </div>
-                  <Check className="w-5 h-5 text-emerald-400" />
+                  {account.connected ? (
+                    <Check className="w-5 h-5 text-emerald-400" />
+                  ) : (
+                    <Button variant="outline" size="sm" className="border-neutral-700">Connect</Button>
+                  )}
                 </div>
-              </div>
+              ))}
             </div>
           </div>
 
           {/* Notifications */}
-          <div className="rounded-2xl bg-neutral-900/50 backdrop-blur-xl border border-white/5 overflow-hidden">
+          <div className={`rounded-2xl bg-neutral-900/50 backdrop-blur-xl border border-white/5 overflow-hidden transition-all duration-700 delay-400 ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4'}`}>
             <div className="p-5 border-b border-white/5">
               <h2 className="text-lg font-bold text-white flex items-center gap-2">
                 <Bell className="w-5 h-5" />
@@ -109,7 +121,7 @@ export default function SettingsPage() {
                 { key: 'drift', label: 'Data Drift', desc: 'Alert on significant drift' },
                 { key: 'reports', label: 'Weekly Reports', desc: 'Summary of system health' },
               ].map((item) => (
-                <label key={item.key} className="flex items-center justify-between cursor-pointer group">
+                <label key={item.key} className="flex items-center justify-between cursor-pointer group p-3 rounded-xl hover:bg-white/5 transition-all">
                   <div>
                     <p className="font-medium text-white group-hover:text-brand-400 transition-colors">{item.label}</p>
                     <p className="text-sm text-neutral-500">{item.desc}</p>
@@ -134,7 +146,7 @@ export default function SettingsPage() {
           </div>
 
           {/* Security */}
-          <div className="rounded-2xl bg-neutral-900/50 backdrop-blur-xl border border-white/5 overflow-hidden">
+          <div className={`rounded-2xl bg-neutral-900/50 backdrop-blur-xl border border-white/5 overflow-hidden transition-all duration-700 delay-500 ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4'}`}>
             <div className="p-5 border-b border-white/5">
               <h2 className="text-lg font-bold text-white flex items-center gap-2">
                 <Shield className="w-5 h-5" />
@@ -144,12 +156,12 @@ export default function SettingsPage() {
             <div className="divide-y divide-white/5">
               {[
                 { label: 'Two-Factor Authentication', value: 'Enabled', icon: Shield },
-                { label: 'API Keys', value: 'Manage access', icon: Zap },
+                { label: 'API Keys', value: 'Manage access', icon: Key },
                 { label: 'Active Sessions', value: '2 active', icon: Users },
               ].map((item, i) => (
-                <div key={i} className="p-5 flex items-center justify-between hover:bg-white/5 transition-all cursor-pointer group">
+                <div key={i} className="p-5 flex items-center justify-between hover:bg-white/5 transition-all cursor-pointer group hover:translate-x-2">
                   <div className="flex items-center gap-4">
-                    <div className="w-10 h-10 rounded-xl bg-neutral-800 flex items-center justify-center">
+                    <div className="w-10 h-10 rounded-xl bg-neutral-800 flex items-center justify-center group-hover:scale-110 transition-transform">
                       <item.icon className="w-5 h-5 text-neutral-400" />
                     </div>
                     <div>
@@ -164,15 +176,16 @@ export default function SettingsPage() {
           </div>
 
           {/* Danger Zone */}
-          <div className="rounded-2xl bg-red-500/5 border border-red-500/20 overflow-hidden">
+          <div className={`rounded-2xl bg-red-500/5 border border-red-500/20 overflow-hidden transition-all duration-700 delay-600 ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4'}`}>
             <div className="p-5 border-b border-red-500/20">
               <h2 className="text-lg font-bold text-red-400">Danger Zone</h2>
             </div>
             <div className="p-5">
               <Button
                 variant="outline"
-                className="w-full border-red-500/50 text-red-400 hover:bg-red-500/10 hover:border-red-500"
+                className="w-full border-red-500/50 text-red-400 hover:bg-red-500/10 hover:border-red-500 hover:scale-[1.02] transition-all"
               >
+                <Trash2 className="w-4 h-4 mr-2" />
                 Delete Organization
               </Button>
             </div>

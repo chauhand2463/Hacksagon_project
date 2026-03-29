@@ -25,7 +25,7 @@ export default function DesignInputPage() {
   }, [constraints.objective, constraints.deployment])
 
   useEffect(() => {
-    if (!canProceedToDesign) {
+    if (!canProceedToDesign()) {
       router.push('/datasets/new')
     }
   }, [canProceedToDesign, router])

@@ -1,5 +1,6 @@
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from fastapi import FastAPI, HTTPException, Header, UploadFile, File, Request
@@ -16,13 +17,13 @@ import traceback
 import os
 
 # Load .env.local for GROQ_API_KEY and other secrets
-_env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.env.local')
+_env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env.local")
 if os.path.exists(_env_path):
-    with open(_env_path, 'r') as _f:
+    with open(_env_path, "r") as _f:
         for _line in _f:
             _line = _line.strip()
-            if _line and not _line.startswith('#') and '=' in _line:
-                _key, _, _val = _line.partition('=')
+            if _line and not _line.startswith("#") and "=" in _line:
+                _key, _, _val = _line.partition("=")
                 _key = _key.strip()
                 _val = _val.strip().strip('"').strip("'")
                 if _key:
@@ -31,23 +32,54 @@ if os.path.exists(_env_path):
 logger = logging.getLogger(__name__)
 
 from agent.planner import DesignAgent, ConstraintSpec
-from ui.database import PipelineStore, DesignStore, RunStore, ActivityStore, FailureStore, UserStore, SessionStore, generate_token
-from lib.state_machine import LifecycleState, ProjectState, ProjectStore, ValidationError, ConstraintViolation, PAGE_TO_STATE, InvalidTransitionError
+from ui.database import (
+    PipelineStore,
+    DesignStore,
+    RunStore,
+    ActivityStore,
+    FailureStore,
+    UserStore,
+    SessionStore,
+    generate_token,
+)
+from lib.state_machine import (
+    LifecycleState,
+    ProjectState,
+    ProjectStore,
+    ValidationError,
+    ConstraintViolation,
+    PAGE_TO_STATE,
+    InvalidTransitionError,
+)
+
+try:
+    from agent.finetuning_service import router as finetuning_router
+
+    HAS_FINETUNING = True
+except ImportError:
+    HAS_FINETUNING = False
+    logger.warning("Fine-tuning service not available")
 
 app = FastAPI(title="System2ML API", version="0.2.0")
+
+if HAS_FINETUNING:
+    app.include_router(finetuning_router)
+
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     logger.error(f"Unhandled exception: {str(exc)}")
     logger.error(traceback.format_exc())
     return JSONResponse(
-        status_code=500,
-        content={"detail": "Internal server error", "message": str(exc)}
+        status_code=500, content={"detail": "Internal server error", "message": str(exc)}
     )
+
+
+cors_origins = os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(",")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -74,36 +106,43 @@ class AuthResponse(BaseModel):
 def register(request: RegisterRequest):
     if not request.email or not request.password or not request.name:
         raise HTTPException(status_code=400, detail="All fields are required")
-    
+
     if len(request.password) < 4:
         raise HTTPException(status_code=400, detail="Password must be at least 4 characters")
-    
+
     user = UserStore.create(request.email, request.password, request.name)
-    
+
     if not user:
         raise HTTPException(status_code=400, detail="Email already exists")
-    
-    token = SessionStore.create(user['id'], generate_token())
-    
+
+    token = SessionStore.create(user["id"], generate_token())
+
     return AuthResponse(user=user, token=token)
 
 
 # ===== LIFECYCLE STATE MACHINE API =====
+
 
 @app.get("/api/lifecycle/state/{project_id}")
 def get_lifecycle_state(project_id: str):
     project = ProjectStore.get(project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    
+
     return {
         "project_id": project.id,
         "name": project.name,
         "current_state": project.current_state.value if project.current_state else None,
         "allowed_next_states": [s.value for s in project.get_allowed_next_states()],
         "is_blocked": project.is_blocked(),
-        "blocking_errors": [{"code": e.code, "message": e.message, "action": e.action} for e in project.get_blocking_errors()],
-        "validation_errors": [{"code": e.code, "message": e.message, "action": e.action} for e in project.validation_errors],
+        "blocking_errors": [
+            {"code": e.code, "message": e.message, "action": e.action}
+            for e in project.get_blocking_errors()
+        ],
+        "validation_errors": [
+            {"code": e.code, "message": e.message, "action": e.action}
+            for e in project.validation_errors
+        ],
         "constraints": project.constraints,
         "profile_info": project.profile_info,
         "dataset_info": project.dataset_info,
@@ -117,7 +156,7 @@ def transition_state(project_id: str, target_state: str, metadata: Optional[Dict
     project = ProjectStore.get(project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    
+
     try:
         target = LifecycleState(target_state)
         project.transition_to(target, metadata or {})
@@ -133,34 +172,47 @@ def validate_state_access(project_id: str, requested_page: str):
     project = ProjectStore.get(project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    
+
     required_state = PAGE_TO_STATE.get(requested_page)
     if not required_state:
         return {"allowed": True, "reason": "Page has no state requirement"}
-    
-    can_access = project.can_transition_to(required_state) or project.current_state == required_state
-    
+
+    can_access = (
+        project.can_transition_to(required_state) or project.current_state == required_state
+    )
+
     return {
         "allowed": can_access,
         "required_state": required_state.value,
         "current_state": project.current_state.value if project.current_state else None,
         "allowed_states": [s.value for s in project.get_allowed_next_states()],
         "is_blocked": project.is_blocked(),
-        "blocking_errors": [{"code": e.code, "message": e.message, "action": e.action} for e in project.get_blocking_errors()],
+        "blocking_errors": [
+            {"code": e.code, "message": e.message, "action": e.action}
+            for e in project.get_blocking_errors()
+        ],
     }
 
 
 @app.post("/api/projects")
 def create_project(name: str):
     project = ProjectStore.create(name)
-    return {"project_id": project.id, "name": project.name, "current_state": project.current_state.value}
+    return {
+        "project_id": project.id,
+        "name": project.name,
+        "current_state": project.current_state.value,
+    }
 
 
 @app.get("/api/projects")
 def list_projects():
     projects = ProjectStore.get_all()
     return [
-        {"project_id": p.id, "name": p.name, "current_state": p.current_state.value if p.current_state else None}
+        {
+            "project_id": p.id,
+            "name": p.name,
+            "current_state": p.current_state.value if p.current_state else None,
+        }
         for p in projects
     ]
 
@@ -184,6 +236,7 @@ def get_project(project_id: str):
 
 
 # ===== DATASET VALIDATION GATE =====
+
 
 class DatasetProfileRequest(BaseModel):
     project_id: Optional[str] = None
@@ -209,18 +262,22 @@ class DatasetValidationRequest(BaseModel):
 def profile_dataset(request: DatasetProfileRequest):
     """Profile a dataset - delegates to the main profiling logic"""
     import uuid
-    
+
     # Try to get existing project or create a new one
     project = None
     if request.project_id:
         project = ProjectStore.get(request.project_id)
-    
+
     if not project:
-        project = ProjectStore.get_all()[0] if ProjectStore.get_all() else ProjectStore.create("New Project")
-    
+        project = (
+            ProjectStore.get_all()[0]
+            if ProjectStore.get_all()
+            else ProjectStore.create("New Project")
+        )
+
     dataset_id = project.id
     errors = []
-    
+
     # Default values
     name = request.file_name or request.dataset_id or "unknown"
     data_type = request.dataset_type or "unknown"
@@ -237,16 +294,16 @@ def profile_dataset(request: DatasetProfileRequest):
     pii_detected = False
     pii_fields = []
     class_balance = None
-    
+
     # For upload source, try to parse the file from disk
     if request.source == "upload":
         import os
-        
+
         file_name = request.file_name
         file_type = request.file_type or "csv"
-        
+
         print(f"[PROFILE] Processing upload: file_name={file_name}, file_type={file_type}")
-        
+
         if file_name and file_type in ["csv"]:
             # Try multiple path possibilities for Windows compatibility
             possible_paths = [
@@ -254,7 +311,7 @@ def profile_dataset(request: DatasetProfileRequest):
                 os.path.join(os.getcwd(), "uploads", file_name),
                 file_name,
             ]
-            
+
             upload_path = None
             for p in possible_paths:
                 full_path = os.path.abspath(p)
@@ -262,68 +319,112 @@ def profile_dataset(request: DatasetProfileRequest):
                 if os.path.exists(full_path):
                     upload_path = full_path
                     break
-            
+
             if upload_path:
                 try:
                     import pandas as pd
-                    
+
                     # Compute actual file size from disk - THIS IS THE SOURCE OF TRUTH
                     file_size_bytes = os.path.getsize(upload_path)
                     size_mb = round(file_size_bytes / (1024 * 1024), 4)
-                    print(f"[PROFILE] File size from disk: {size_mb} MB for {file_name} at {upload_path}")
-                    
+                    print(
+                        f"[PROFILE] File size from disk: {size_mb} MB for {file_name} at {upload_path}"
+                    )
+
                     df = pd.read_csv(upload_path)
-                    
+
                     rows = len(df)
                     columns = len(df.columns)
                     features = max(0, columns - 1)
                     data_type = "tabular"
-                    
+
                     if columns < 2:
-                        errors.append({"code": "INSUFFICIENT_COLUMNS", "message": f"Dataset has only {columns} column(s), need at least 2"})
-                    
+                        errors.append(
+                            {
+                                "code": "INSUFFICIENT_COLUMNS",
+                                "message": f"Dataset has only {columns} column(s), need at least 2",
+                            }
+                        )
+
                     # Detect missing values
                     missing_values = int(df.isnull().sum().sum())
                     if rows > 0 and columns > 0:
                         missing_percentage = round((missing_values / (rows * columns)) * 100, 2)
-                    
+
                     # Check for label column
-                    label_candidates = [col for col in df.columns if any(x in col.lower() for x in ['label', 'target', 'y', 'class', 'output', 'dependent'])]
+                    label_candidates = [
+                        col
+                        for col in df.columns
+                        if any(
+                            x in col.lower()
+                            for x in ["label", "target", "y", "class", "output", "dependent"]
+                        )
+                    ]
                     if label_candidates:
                         label_column = label_candidates[0]
                         label_present = True
-                        
+
                         label_col = df[label_column]
                         if pd.api.types.is_numeric_dtype(label_col):
                             unique_ratio = label_col.nunique() / max(rows, 1)
                             if unique_ratio < 0.1:
                                 label_type = "classification"
                                 inferred_task = "classification"
-                                class_balance = {str(k): int(v) for k, v in label_col.value_counts().items()}
+                                class_balance = {
+                                    str(k): int(v) for k, v in label_col.value_counts().items()
+                                }
                             else:
                                 label_type = "regression"
                                 inferred_task = "regression"
                         else:
                             label_type = "classification"
                             inferred_task = "classification"
-                            class_balance = {str(k): int(v) for k, v in label_col.value_counts().items()}
+                            class_balance = {
+                                str(k): int(v) for k, v in label_col.value_counts().items()
+                            }
                     else:
                         inferred_task = "unsupervised"
-                    
+
                     # Check for PII
-                    pii_keywords = ["email", "phone", "ssn", "social", "credit", "card", "password", "address", "dob", "birth", "name", "first", "last"]
+                    pii_keywords = [
+                        "email",
+                        "phone",
+                        "ssn",
+                        "social",
+                        "credit",
+                        "card",
+                        "password",
+                        "address",
+                        "dob",
+                        "birth",
+                        "name",
+                        "first",
+                        "last",
+                    ]
                     for col in df.columns:
                         if any(keyword in col.lower() for keyword in pii_keywords):
                             pii_fields.append(col)
                     pii_detected = len(pii_fields) > 0
-                    
+
                 except Exception as e:
-                    errors.append({"code": "PARSE_ERROR", "message": f"Failed to parse file: {str(e)}"})
+                    errors.append(
+                        {"code": "PARSE_ERROR", "message": f"Failed to parse file: {str(e)}"}
+                    )
             else:
-                errors.append({"code": "FILE_NOT_FOUND", "message": f"File {file_name} not found. Please upload first."})
+                errors.append(
+                    {
+                        "code": "FILE_NOT_FOUND",
+                        "message": f"File {file_name} not found. Please upload first.",
+                    }
+                )
         else:
-            errors.append({"code": "UNSUPPORTED_TYPE", "message": f"File type {file_type} not supported for profiling"})
-    
+            errors.append(
+                {
+                    "code": "UNSUPPORTED_TYPE",
+                    "message": f"File type {file_type} not supported for profiling",
+                }
+            )
+
     # Set status
     if errors and features == 0 and rows == 0:
         status = "failed"
@@ -331,11 +432,11 @@ def profile_dataset(request: DatasetProfileRequest):
         status = "partial"
     else:
         status = "profiled"
-    
+
     # Default task
     if features > 0 and inferred_task == "unknown":
         inferred_task = "classification"
-    
+
     profile_result = {
         "status": status,
         "dataset_id": dataset_id,
@@ -377,8 +478,10 @@ def profile_dataset(request: DatasetProfileRequest):
             "class_balance": class_balance,
         },
         "errors": errors,
-        "current_state": "DATASET_PROFILED" if status in ["profiled", "partial"] else "DATASET_UPLOADED",
-        "project_id": dataset_id
+        "current_state": "DATASET_PROFILED"
+        if status in ["profiled", "partial"]
+        else "DATASET_UPLOADED",
+        "project_id": dataset_id,
     }
 
     # Update global project state
@@ -389,9 +492,9 @@ def profile_dataset(request: DatasetProfileRequest):
                 project.transition_to(LifecycleState.DATASET_PROFILED, profile_result["profile"])
             except:
                 pass
-    
+
     return profile_result
-    
+
 
 @app.post("/api/datasets/validate-v2")
 def validate_dataset_v2(request: DatasetValidationRequest):
@@ -400,6 +503,7 @@ def validate_dataset_v2(request: DatasetValidationRequest):
 
 
 # ===== TRAINING PLANNING GATE =====
+
 
 class TrainingPlanRequest(BaseModel):
     project_id: Optional[str] = None
@@ -420,54 +524,64 @@ def plan_training(request: TrainingPlanRequest):
             else:
                 new_project = ProjectStore.create("Auto-created Project")
                 project_id = new_project.id
-        
+
         project = ProjectStore.get(project_id)
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
-        
+
         # Valid states for planning are when we have candidates or execution is approved
-        if project.current_state not in [LifecycleState.EXECUTION_APPROVED, LifecycleState.CANDIDATES_GENERATED, LifecycleState.TRAINING_BLOCKED]:
+        if project.current_state not in [
+            LifecycleState.EXECUTION_APPROVED,
+            LifecycleState.CANDIDATES_GENERATED,
+            LifecycleState.TRAINING_BLOCKED,
+        ]:
             raise HTTPException(
-                status_code=400, 
-                detail=f"Cannot plan training in state {project.current_state}. Please select a pipeline first."
+                status_code=400,
+                detail=f"Cannot plan training in state {project.current_state}. Please select a pipeline first.",
             )
-        
+
         constraints = project.constraints
         max_cost = constraints.get("max_cost_usd", 100)
         max_carbon = constraints.get("max_carbon_kg", 10)
         max_latency = constraints.get("max_latency_ms", 60000)
-        
+
         estimated_cost = (request.dataset_rows / 10000) * 0.05 * (request.estimated_epochs / 100)
         estimated_carbon = estimated_cost * 0.5
         estimated_time_ms = (request.dataset_rows / 1000) * 1000 * (request.estimated_epochs / 100)
         peak_memory_mb = (request.dataset_rows / 10000) * 512
-        
+
         violations = []
-        
+
         if estimated_cost > max_cost:
-            violations.append(ConstraintViolation(
-                metric="cost",
-                estimated=estimated_cost,
-                limit=max_cost,
-                suggestion="sample_data or switch_model_family"
-            ))
-        
+            violations.append(
+                ConstraintViolation(
+                    metric="cost",
+                    estimated=estimated_cost,
+                    limit=max_cost,
+                    suggestion="sample_data or switch_model_family",
+                )
+            )
+
         if estimated_carbon > max_carbon:
-            violations.append(ConstraintViolation(
-                metric="carbon",
-                estimated=estimated_carbon,
-                limit=max_carbon,
-                suggestion="reduce_epochs or use_smaller_model"
-            ))
-        
+            violations.append(
+                ConstraintViolation(
+                    metric="carbon",
+                    estimated=estimated_carbon,
+                    limit=max_carbon,
+                    suggestion="reduce_epochs or use_smaller_model",
+                )
+            )
+
         if estimated_time_ms > max_latency:
-            violations.append(ConstraintViolation(
-                metric="latency",
-                estimated=estimated_time_ms,
-                limit=max_latency,
-                suggestion="reduce_dataset_size or optimize_model"
-            ))
-        
+            violations.append(
+                ConstraintViolation(
+                    metric="latency",
+                    estimated=estimated_time_ms,
+                    limit=max_latency,
+                    suggestion="reduce_dataset_size or optimize_model",
+                )
+            )
+
         training_plan = {
             "estimated_cost_usd": round(estimated_cost, 2),
             "estimated_carbon_kg": round(estimated_carbon, 2),
@@ -476,24 +590,42 @@ def plan_training(request: TrainingPlanRequest):
             "model_type": request.model_type,
             "dataset_rows": request.dataset_rows,
             "violations": [
-                {"metric": v.metric, "estimated": v.estimated, "limit": v.limit, "suggestion": v.suggestion}
+                {
+                    "metric": v.metric,
+                    "estimated": v.estimated,
+                    "limit": v.limit,
+                    "suggestion": v.suggestion,
+                }
                 for v in violations
             ],
         }
-        
+
         project.training_plan = training_plan
-        
+
         if violations:
-            project.transition_to(LifecycleState.TRAINING_BLOCKED, {"violations": violations, "plan": training_plan})
+            project.transition_to(
+                LifecycleState.TRAINING_BLOCKED, {"violations": violations, "plan": training_plan}
+            )
             return {
                 "status": "blocked",
-                "violations": [{"metric": v.metric, "estimated": v.estimated, "limit": v.limit, "suggestion": v.suggestion} for v in violations],
+                "violations": [
+                    {
+                        "metric": v.metric,
+                        "estimated": v.estimated,
+                        "limit": v.limit,
+                        "suggestion": v.suggestion,
+                    }
+                    for v in violations
+                ],
                 "plan": training_plan,
                 "current_state": project.current_state.value,
             }
-        
+
         # If no violations, and we were blocked or just generated, we are now "execution approved" for training
-        if project.current_state in [LifecycleState.CANDIDATES_GENERATED, LifecycleState.TRAINING_BLOCKED]:
+        if project.current_state in [
+            LifecycleState.CANDIDATES_GENERATED,
+            LifecycleState.TRAINING_BLOCKED,
+        ]:
             project.transition_to(LifecycleState.EXECUTION_APPROVED, training_plan)
 
         return {
@@ -506,10 +638,13 @@ def plan_training(request: TrainingPlanRequest):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Unexpected error in plan_training: {str(e)}")
-        raise HTTPException(status_code=500, detail="Internal server error during training planning")
+        raise HTTPException(
+            status_code=500, detail="Internal server error during training planning"
+        )
 
 
 # ===== LIVE TRAINING WITH KILL-SWITCH =====
+
 
 class TrainingStartRequest(BaseModel):
     project_id: str
@@ -521,10 +656,12 @@ def start_training(request: TrainingStartRequest):
     project = ProjectStore.get(request.project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    
+
     if project.current_state != LifecycleState.EXECUTION_APPROVED:
-        raise HTTPException(status_code=400, detail="Training must be planned and approved before starting")
-    
+        raise HTTPException(
+            status_code=400, detail="Training must be planned and approved before starting"
+        )
+
     training_config = {
         "pipeline_id": request.pipeline_id,
         "started_at": datetime.utcnow().isoformat(),
@@ -532,9 +669,9 @@ def start_training(request: TrainingStartRequest):
         "cost_used": 0.0,
         "carbon_used": 0.0,
     }
-    
+
     project.transition_to(LifecycleState.TRAINING_RUNNING, training_config)
-    
+
     return {
         "status": "started",
         "training_id": str(uuid.uuid4())[:8],
@@ -547,33 +684,36 @@ def get_training_status(project_id: str):
     project = ProjectStore.get(project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    
+
     if project.current_state != LifecycleState.TRAINING_RUNNING:
         return {
             "status": project.current_state.value if project.current_state else "not_running",
             "training_result": project.training_result,
         }
-    
+
     constraints = project.constraints
     max_cost = constraints.get("max_cost_usd", 100)
     max_carbon = constraints.get("max_carbon_kg", 10)
-    
+
     running_plan = project.training_plan
     cost_used = running_plan.get("estimated_cost_usd", 0) * random.uniform(0.3, 0.7)
     carbon_used = running_plan.get("estimated_carbon_kg", 0) * random.uniform(0.3, 0.7)
-    
+
     kill_reason = None
     if cost_used > max_cost:
         kill_reason = "COST_LIMIT_EXCEEDED"
     elif carbon_used > max_carbon:
         kill_reason = "CARBON_LIMIT_EXCEEDED"
-    
+
     if kill_reason:
-        project.transition_to(LifecycleState.TRAINING_KILLED, {
-            "reason": kill_reason,
-            "cost_used": cost_used,
-            "carbon_used": carbon_used,
-        })
+        project.transition_to(
+            LifecycleState.TRAINING_KILLED,
+            {
+                "reason": kill_reason,
+                "cost_used": cost_used,
+                "carbon_used": carbon_used,
+            },
+        )
         return {
             "status": "killed",
             "reason": kill_reason,
@@ -581,7 +721,7 @@ def get_training_status(project_id: str):
             "carbon_used": round(carbon_used, 2),
             "current_state": project.current_state.value,
         }
-    
+
     return {
         "status": "running",
         "progress": random.randint(30, 70),
@@ -596,12 +736,12 @@ def stop_training(project_id: str):
     project = ProjectStore.get(project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    
+
     if project.current_state != LifecycleState.TRAINING_RUNNING:
         raise HTTPException(status_code=400, detail="No training running to stop")
-    
+
     project.transition_to(LifecycleState.TRAINING_KILLED, {"reason": "USER_REQUESTED"})
-    
+
     return {
         "status": "stopped",
         "current_state": project.current_state.value,
@@ -613,10 +753,10 @@ def complete_training(project_id: str, metrics: Optional[Dict[str, Any]] = None)
     project = ProjectStore.get(project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    
+
     if project.current_state != LifecycleState.TRAINING_RUNNING:
         raise HTTPException(status_code=400, detail="No training running to complete")
-    
+
     result = {
         "status": "completed",
         "completed_at": datetime.utcnow().isoformat(),
@@ -624,9 +764,9 @@ def complete_training(project_id: str, metrics: Optional[Dict[str, Any]] = None)
         "cost_total": project.training_plan.get("estimated_cost_usd", 0),
         "carbon_total": project.training_plan.get("estimated_carbon_kg", 0),
     }
-    
+
     project.transition_to(LifecycleState.TRAINING_COMPLETED, result)
-    
+
     return {
         "status": "completed",
         "result": result,
@@ -638,14 +778,14 @@ def complete_training(project_id: str, metrics: Optional[Dict[str, Any]] = None)
 def login(request: LoginRequest):
     if not request.email or not request.password:
         raise HTTPException(status_code=400, detail="Email and password are required")
-    
+
     user = UserStore.verify_login(request.email, request.password)
-    
+
     if not user:
         raise HTTPException(status_code=401, detail="Invalid email or password")
-    
-    token = SessionStore.create(user['id'], generate_token())
-    
+
+    token = SessionStore.create(user["id"], generate_token())
+
     return AuthResponse(user=user, token=token)
 
 
@@ -661,13 +801,13 @@ def logout(authorization: Optional[str] = Header(None)):
 def get_current_user(authorization: Optional[str] = Header(None)):
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Not authenticated")
-    
+
     token = authorization[7:]
     user = SessionStore.get_user_by_token(token)
-    
+
     if not user:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
-    
+
     return user
 
 
@@ -718,13 +858,13 @@ def design_pipeline(request: DesignRequest):
             compliance=request.constraints.compliance_level,
             retraining=request.retraining,
         )
-        
+
         agent = get_design_agent()
         result = agent.generate_designs(constraints)
-        
+
         pipeline_id = str(uuid.uuid4())[:8]
         name = request.name or f"Pipeline-{pipeline_id}"
-        
+
         PipelineStore.create(
             pipeline_id=pipeline_id,
             name=name,
@@ -739,10 +879,10 @@ def design_pipeline(request: DesignRequest):
             deployment=request.deployment,
             retraining=request.retraining,
         )
-        
+
         for i, design in enumerate(result.get("designs", [])):
             DesignStore.create(pipeline_id, design, i + 1)
-        
+
         status = result.get("status", "unknown")
         if status == "success":
             PipelineStore.update_status(pipeline_id, "designed")
@@ -750,11 +890,11 @@ def design_pipeline(request: DesignRequest):
                 type_="pipeline",
                 title=f"Pipeline '{name}' designed",
                 description=f"Generated {len(result.get('designs', []))} pipeline designs",
-                severity="low"
+                severity="low",
             )
         else:
             PipelineStore.update_status(pipeline_id, "failed")
-        
+
         response = {
             "pipeline_id": pipeline_id,
             "name": name,
@@ -764,9 +904,9 @@ def design_pipeline(request: DesignRequest):
             "feasibility": result.get("feasibility", {}),
             "status": status,
         }
-        
+
         return response
-        
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -775,8 +915,12 @@ def design_pipeline(request: DesignRequest):
 def list_pipelines():
     pipelines = PipelineStore.get_all()
     for p in pipelines:
-        if p.get('constraints'):
-            p['constraints'] = json.loads(p['constraints']) if isinstance(p['constraints'], str) else p['constraints']
+        if p.get("constraints"):
+            p["constraints"] = (
+                json.loads(p["constraints"])
+                if isinstance(p["constraints"], str)
+                else p["constraints"]
+            )
     return {"pipelines": pipelines}
 
 
@@ -785,8 +929,12 @@ def get_pipeline(pipeline_id: str):
     pipeline = PipelineStore.get_by_id(pipeline_id)
     if not pipeline:
         raise HTTPException(status_code=404, detail="Pipeline not found")
-    if pipeline.get('constraints'):
-        pipeline['constraints'] = json.loads(pipeline['constraints']) if isinstance(pipeline['constraints'], str) else pipeline['constraints']
+    if pipeline.get("constraints"):
+        pipeline["constraints"] = (
+            json.loads(pipeline["constraints"])
+            if isinstance(pipeline["constraints"], str)
+            else pipeline["constraints"]
+        )
     designs = DesignStore.get_by_pipeline(pipeline_id)
     return {"pipeline": pipeline, "designs": designs}
 
@@ -796,28 +944,29 @@ def execute_pipeline(pipeline_id: str):
     pipeline = PipelineStore.get_by_id(pipeline_id)
     if not pipeline:
         raise HTTPException(status_code=404, detail="Pipeline not found")
-    
+
     run_id = str(uuid.uuid4())[:12]
     RunStore.create(run_id, pipeline_id)
-    
+
     PipelineStore.update_status(pipeline_id, "running")
-    
+
     ActivityStore.log(
         type_="deployment",
         title=f"Pipeline '{pipeline['name']}' execution started",
         description=f"Run ID: {run_id}",
-        severity="medium"
+        severity="medium",
     )
-    
+
     import time
+
     time.sleep(0.5)  # Snappy but visible transition
-    
+
     # Perfectly optimized metrics for the "advanced" pipelines
     accuracy = random.uniform(0.92, 0.98)
     f1 = random.uniform(0.90, 0.96)
-    cost = random.uniform(0.1, 0.8) # Efficient!
-    carbon = random.uniform(0.005, 0.05) # Green!
-    
+    cost = random.uniform(0.1, 0.8)  # Efficient!
+    carbon = random.uniform(0.005, 0.05)  # Green!
+
     RunStore.update(
         run_id,
         status="completed",
@@ -826,18 +975,18 @@ def execute_pipeline(pipeline_id: str):
             "f1": f1,
             "cost": cost,
             "carbon": carbon,
-        }
+        },
     )
-    
+
     PipelineStore.update_status(pipeline_id, "active")
-    
+
     ActivityStore.log(
         type_="deployment",
         title=f"Pipeline '{pipeline['name']}' completed successfully",
         description=f"Run ID: {run_id} - Accuracy: {accuracy:.2%}",
-        severity="low"
+        severity="low",
     )
-    
+
     return {
         "run_id": run_id,
         "pipeline_id": pipeline_id,
@@ -847,7 +996,7 @@ def execute_pipeline(pipeline_id: str):
             "f1": f1,
             "cost": cost,
             "carbon": carbon,
-        }
+        },
     }
 
 
@@ -869,17 +1018,17 @@ def get_run(run_id: str):
 def get_metrics():
     pipelines = PipelineStore.get_all()
     runs = RunStore.get_all()
-    
+
     total_pipelines = len(pipelines)
-    active_pipelines = len([p for p in pipelines if p.get('status') == 'active'])
-    
+    active_pipelines = len([p for p in pipelines if p.get("status") == "active"])
+
     # Filter for completed runs and handle missing/malformed records
-    completed_runs = [r for r in runs if isinstance(r, dict) and r.get('status') == 'completed']
-    
+    completed_runs = [r for r in runs if isinstance(r, dict) and r.get("status") == "completed"]
+
     def safe_metric(r, metric_name):
         if not isinstance(r, dict):
             return 0.0
-        
+
         metrics = r.get("metrics")
         # Handle cases where metrics might be stored as a JSON string in DB
         if isinstance(metrics, str):
@@ -887,17 +1036,17 @@ def get_metrics():
                 metrics = json.loads(metrics)
             except:
                 metrics = {}
-        
+
         if not isinstance(metrics, dict):
             return 0.0
-            
+
         val = metrics.get(metric_name, 0)
         return float(val) if isinstance(val, (int, float)) else 0.0
 
     acc_values = [safe_metric(r, "accuracy") for r in completed_runs]
     cost_values = [safe_metric(r, "cost") for r in completed_runs]
     carbon_values = [safe_metric(r, "carbon") for r in completed_runs]
-    
+
     durations = []
     for r in completed_runs:
         try:
@@ -906,14 +1055,14 @@ def get_metrics():
             durations.append((end - start).total_seconds())
         except:
             continue
-            
+
     avg_accuracy = sum(acc_values) / max(len(acc_values), 1)
     avg_cost = sum(cost_values) / max(len(cost_values), 1)
     avg_carbon = sum(carbon_values) / max(len(carbon_values), 1)
     avg_latency = (sum(durations) / max(len(durations), 1)) * 1000 if durations else 150.0  # ms
-    
+
     # Simple weekly cost estimation (this week vs last)
-    total_weekly_cost = sum(cost_values) # Mocking this as simply current total for now
+    total_weekly_cost = sum(cost_values)  # Mocking this as simply current total for now
     monthly_estimate = total_weekly_cost * 4
 
     # Generate historical data from runs
@@ -923,38 +1072,42 @@ def get_metrics():
         for r in completed_runs:
             try:
                 date = r.get("started_at", "").split("T")[0]
-                if not date: continue
+                if not date:
+                    continue
                 if date not in history:
                     history[date] = {"cost": 0, "carbon": 0, "count": 0}
-                
+
                 m = safe_metric(r, "cost")
                 history[date]["cost"] += m
                 history[date]["carbon"] += safe_metric(r, "carbon")
                 history[date]["count"] += 1
             except:
                 continue
-        
+
         # Sort and format for frontend
         sorted_dates = sorted(history.keys())
         cost_history = [{"date": d, "value": history[d]["cost"]} for d in sorted_dates]
         carbon_history = [{"date": d, "value": history[d]["carbon"]} for d in sorted_dates]
-        
+
         # If no history, provide some seed data based on totals to avoid empty charts
         if not cost_history:
             cost_history = [{"date": "2024-02-20", "value": 0}]
             carbon_history = [{"date": "2024-02-20", "value": 0}]
-            
+
         return cost_history, carbon_history
 
     cost_history, carbon_history = get_history()
 
-
-    
     # Log invalid records if identified
-    bad = [r for r in runs if r.get('status') == 'completed' and (not isinstance(r, dict) or not isinstance(r.get("metrics"), (dict, str)))]
+    bad = [
+        r
+        for r in runs
+        if r.get("status") == "completed"
+        and (not isinstance(r, dict) or not isinstance(r.get("metrics"), (dict, str)))
+    ]
     if bad:
         logger.warning(f"Invalid runs in completed_runs: {bad[:3]}")
-    
+
     return {
         "total_pipelines": total_pipelines,
         "active_pipelines": active_pipelines,
@@ -969,7 +1122,7 @@ def get_metrics():
         "cost_trend": "+2.4%",  # Mock trend for now
         "carbon_trend": "-1.5%",
         "cost_history": cost_history,
-        "carbon_history": carbon_history
+        "carbon_history": carbon_history,
     }
 
 
@@ -987,11 +1140,31 @@ def list_activities():
 def list_predefined():
     return {
         "pipelines": [
-            {"name": "titanic_survival", "description": "Titanic survival prediction", "data_type": "tabular"},
-            {"name": "iris_classification", "description": "Iris flower classification", "data_type": "tabular"},
-            {"name": "sentiment_analysis", "description": "Text sentiment classification", "data_type": "text"},
-            {"name": "image_classification", "description": "Image classification", "data_type": "image"},
-            {"name": "timeseries_forecast", "description": "Time series forecasting", "data_type": "time-series"},
+            {
+                "name": "titanic_survival",
+                "description": "Titanic survival prediction",
+                "data_type": "tabular",
+            },
+            {
+                "name": "iris_classification",
+                "description": "Iris flower classification",
+                "data_type": "tabular",
+            },
+            {
+                "name": "sentiment_analysis",
+                "description": "Text sentiment classification",
+                "data_type": "text",
+            },
+            {
+                "name": "image_classification",
+                "description": "Image classification",
+                "data_type": "image",
+            },
+            {
+                "name": "timeseries_forecast",
+                "description": "Time series forecasting",
+                "data_type": "time-series",
+            },
         ]
     }
 
@@ -1000,6 +1173,7 @@ def list_predefined():
 # VALIDATION & FEASIBILITY ENDPOINTS
 # ============================================
 
+
 @app.post("/api/validate")
 def validate_constraints(request: dict):
     """Validate user input constraints before design"""
@@ -1007,42 +1181,48 @@ def validate_constraints(request: dict):
     constraints = request.get("constraints", {})
     violations = []
     suggestions = []
-    
+
     max_cost = constraints.get("max_cost_usd", 10)
     max_carbon = constraints.get("max_carbon_kg", 1.0)
     max_latency = constraints.get("max_latency_ms", 200)
     deployment = request.get("deployment", "batch")
-    
+
     if max_cost < 0.1:
-        violations.append({
-            "constraint": "max_cost_usd",
-            "value": max_cost,
-            "required": 0.1,
-            "severity": "hard",
-            "message": "Cost must be at least $0.10"
-        })
-    
+        violations.append(
+            {
+                "constraint": "max_cost_usd",
+                "value": max_cost,
+                "required": 0.1,
+                "severity": "hard",
+                "message": "Cost must be at least $0.10",
+            }
+        )
+
     if max_cost < 5 and deployment == "realtime":
-        violations.append({
-            "constraint": "max_cost_usd",
-            "value": max_cost,
-            "required": 5.0,
-            "severity": "hard",
-            "message": "Real-time deployment requires at least $5 budget"
-        })
-    
+        violations.append(
+            {
+                "constraint": "max_cost_usd",
+                "value": max_cost,
+                "required": 5.0,
+                "severity": "hard",
+                "message": "Real-time deployment requires at least $5 budget",
+            }
+        )
+
     if max_cost < 1:
-        suggestions.append({
-            "constraint": "max_cost_usd",
-            "current_value": max_cost,
-            "suggested_value": 5.0,
-            "reason": "Accuracy optimization typically requires more compute",
-            "priority": 1
-        })
-    
+        suggestions.append(
+            {
+                "constraint": "max_cost_usd",
+                "current_value": max_cost,
+                "suggested_value": 5.0,
+                "reason": "Accuracy optimization typically requires more compute",
+                "priority": 1,
+            }
+        )
+
     is_valid = len([v for v in violations if v["severity"] == "hard"]) == 0
     feasibility_score = 1.0 - (len(violations) * 0.3)
-    
+
     # Update project state
     if project_id and is_valid:
         project = ProjectStore.get(project_id)
@@ -1066,22 +1246,22 @@ def get_feasibility_policy(request: dict):
     constraints = request.get("constraints", {})
     deployment = request.get("deployment", "batch")
     compliance = constraints.get("compliance_level", "standard")
-    
+
     eligible = ["classical", "small_deep", "compressed"]
-    
+
     if compliance in ["regulated", "highly_regulated"]:
         eligible = ["classical", "compressed"]
     elif deployment != "edge":
         eligible.append("transformer")
-    
+
     return {
         "request_id": str(uuid.uuid4()),
         "eligible_model_families": eligible,
-        "hard_constraints": ["max_cost_usd", "max_carbon_kg"] + 
-                           (["max_latency_ms"] if deployment == "realtime" else []),
+        "hard_constraints": ["max_cost_usd", "max_carbon_kg"]
+        + (["max_latency_ms"] if deployment == "realtime" else []),
         "soft_constraints": ["min_accuracy", "max_latency_ms"],
-        "required_monitors": ["cost", "latency"] + 
-                           (["carbon"] if constraints.get("max_carbon_kg", 1) < 1 else []),
+        "required_monitors": ["cost", "latency"]
+        + (["carbon"] if constraints.get("max_carbon_kg", 1) < 1 else []),
     }
 
 
@@ -1093,48 +1273,68 @@ def generate_pipeline_candidates(request: dict):
     max_cost = constraints.get("max_cost_usd", 10)
     max_carbon = constraints.get("max_carbon_kg", 1.0)
     max_latency = constraints.get("max_latency_ms", 200)
-    
+
     profiles = {
         "classical": {"cost": 0.5, "carbon": 0.01, "latency": 100, "accuracy": 0.82},
         "small_deep": {"cost": 2.0, "carbon": 0.1, "latency": 500, "accuracy": 0.88},
         "compressed": {"cost": 0.8, "carbon": 0.03, "latency": 200, "accuracy": 0.85},
         "transformer": {"cost": 8.0, "carbon": 0.5, "latency": 2000, "accuracy": 0.95},
     }
-    
+
     candidates = []
     for family, p in profiles.items():
         violates = []
         if p["cost"] > max_cost:
-            violates.append({"constraint": "max_cost_usd", "message": f"${p['cost']} exceeds ${max_cost}"})
+            violates.append(
+                {"constraint": "max_cost_usd", "message": f"${p['cost']} exceeds ${max_cost}"}
+            )
         if p["carbon"] > max_carbon:
-            violates.append({"constraint": "max_carbon_kg", "message": f"{p['carbon']}kg exceeds {max_carbon}kg"})
+            violates.append(
+                {
+                    "constraint": "max_carbon_kg",
+                    "message": f"{p['carbon']}kg exceeds {max_carbon}kg",
+                }
+            )
         if p["latency"] > max_latency:
-            violates.append({"constraint": "max_latency_ms", "message": f"{p['latency']}ms exceeds {max_latency}ms"})
-        
-        candidates.append({
-            "id": str(uuid.uuid4()),
-            "name": f"{family.title()} ML Pipeline",
-            "description": f"Pipeline using {family} models",
-            "model_families": [family],
-            "estimated_cost": p["cost"],
-            "estimated_carbon": p["carbon"],
-            "estimated_latency_ms": p["latency"],
-            "estimated_accuracy": p["accuracy"],
-            "violates_constraints": violates,
-        })
-    
+            violates.append(
+                {
+                    "constraint": "max_latency_ms",
+                    "message": f"{p['latency']}ms exceeds {max_latency}ms",
+                }
+            )
+
+        candidates.append(
+            {
+                "id": str(uuid.uuid4()),
+                "name": f"{family.title()} ML Pipeline",
+                "description": f"Pipeline using {family} models",
+                "model_families": [family],
+                "estimated_cost": p["cost"],
+                "estimated_carbon": p["carbon"],
+                "estimated_latency_ms": p["latency"],
+                "estimated_accuracy": p["accuracy"],
+                "violates_constraints": violates,
+            }
+        )
+
     feasible = [c for c in candidates if not c["violates_constraints"]]
-    
+
     # Update project state
     if project_id:
         project = ProjectStore.get(project_id)
         if project:
             try:
-                project.transition_to(LifecycleState.CANDIDATES_GENERATED, {"candidates": candidates})
+                project.transition_to(
+                    LifecycleState.CANDIDATES_GENERATED, {"candidates": candidates}
+                )
             except:
                 pass
 
-    return {"candidates": candidates, "feasible_count": len(feasible), "total_count": len(candidates)}
+    return {
+        "candidates": candidates,
+        "feasible_count": len(feasible),
+        "total_count": len(candidates),
+    }
 
 
 @app.post("/api/safety/validate-execution")
@@ -1143,30 +1343,50 @@ def validate_execution(request: dict):
     project_id = request.get("project_id")
     constraints = request.get("constraints", {})
     pipeline = request.get("pipeline", {})
-    
+
     max_cost = constraints.get("max_cost_usd", 10)
     max_carbon = constraints.get("max_carbon_kg", 1.0)
     max_latency = constraints.get("max_latency_ms", 200)
-    
+
     est_cost = pipeline.get("estimated_cost", 0)
     est_carbon = pipeline.get("estimated_carbon", 0)
     est_latency = pipeline.get("estimated_latency_ms", 0)
-    
+
     violations = []
     warnings = []
-    
+
     if est_cost > max_cost:
-        violations.append({"constraint": "max_cost_usd", "message": f"${est_cost:.2f} exceeds ${max_cost}", "severity": "hard"})
+        violations.append(
+            {
+                "constraint": "max_cost_usd",
+                "message": f"${est_cost:.2f} exceeds ${max_cost}",
+                "severity": "hard",
+            }
+        )
     if est_carbon > max_carbon:
-        violations.append({"constraint": "max_carbon_kg", "message": f"{est_carbon:.4f}kg exceeds {max_carbon}kg", "severity": "hard"})
+        violations.append(
+            {
+                "constraint": "max_carbon_kg",
+                "message": f"{est_carbon:.4f}kg exceeds {max_carbon}kg",
+                "severity": "hard",
+            }
+        )
     if est_latency > max_latency:
-        violations.append({"constraint": "max_latency_ms", "message": f"{est_latency}ms exceeds {max_latency}ms", "severity": "hard"})
-    
+        violations.append(
+            {
+                "constraint": "max_latency_ms",
+                "message": f"{est_latency}ms exceeds {max_latency}ms",
+                "severity": "hard",
+            }
+        )
+
     if est_cost > max_cost * 0.8:
-        warnings.append({"type": "cost_warning", "message": f"Cost uses {est_cost/max_cost:.0%} of budget"})
-    
+        warnings.append(
+            {"type": "cost_warning", "message": f"Cost uses {est_cost / max_cost:.0%} of budget"}
+        )
+
     can_execute = len(violations) == 0 or request.get("force", False)
-    
+
     # Transition project state if successful
     if can_execute and project_id:
         project = ProjectStore.get(project_id)
@@ -1175,7 +1395,7 @@ def validate_execution(request: dict):
                 project.transition_to(LifecycleState.EXECUTION_APPROVED, {"pipeline": pipeline})
             except:
                 pass
-                
+
     return {"can_execute": can_execute, "violations": violations, "warnings": warnings}
 
 
@@ -1184,14 +1404,46 @@ def get_eligibility_matrix():
     """Get the model eligibility matrix"""
     return {
         "model_families": [
-            {"family": "classical", "name": "Classical ML", "description": "Random Forest, XGBoost",
-             "cost_range": [0.1, 2.0], "carbon_per_run": 0.01, "latency_ms": 100, "accuracy_range": [0.6, 0.85], "requires_gpu": False},
-            {"family": "small_deep", "name": "Small Deep Learning", "description": "Lightweight neural networks",
-             "cost_range": [0.5, 10.0], "carbon_per_run": 0.1, "latency_ms": 500, "accuracy_range": [0.75, 0.92], "requires_gpu": True},
-            {"family": "compressed", "name": "Compressed/Quantized", "description": "Optimized for efficiency",
-             "cost_range": [0.2, 3.0], "carbon_per_run": 0.03, "latency_ms": 200, "accuracy_range": [0.7, 0.88], "requires_gpu": False},
-            {"family": "transformer", "name": "Transformer Models", "description": "BERT, GPT, ViT",
-             "cost_range": [3.0, 50.0], "carbon_per_run": 0.5, "latency_ms": 2000, "accuracy_range": [0.85, 0.98], "requires_gpu": True},
+            {
+                "family": "classical",
+                "name": "Classical ML",
+                "description": "Random Forest, XGBoost",
+                "cost_range": [0.1, 2.0],
+                "carbon_per_run": 0.01,
+                "latency_ms": 100,
+                "accuracy_range": [0.6, 0.85],
+                "requires_gpu": False,
+            },
+            {
+                "family": "small_deep",
+                "name": "Small Deep Learning",
+                "description": "Lightweight neural networks",
+                "cost_range": [0.5, 10.0],
+                "carbon_per_run": 0.1,
+                "latency_ms": 500,
+                "accuracy_range": [0.75, 0.92],
+                "requires_gpu": True,
+            },
+            {
+                "family": "compressed",
+                "name": "Compressed/Quantized",
+                "description": "Optimized for efficiency",
+                "cost_range": [0.2, 3.0],
+                "carbon_per_run": 0.03,
+                "latency_ms": 200,
+                "accuracy_range": [0.7, 0.88],
+                "requires_gpu": False,
+            },
+            {
+                "family": "transformer",
+                "name": "Transformer Models",
+                "description": "BERT, GPT, ViT",
+                "cost_range": [3.0, 50.0],
+                "carbon_per_run": 0.5,
+                "latency_ms": 2000,
+                "accuracy_range": [0.85, 0.98],
+                "requires_gpu": True,
+            },
         ]
     }
 
@@ -1199,7 +1451,6 @@ def get_eligibility_matrix():
 # ============================================
 # DATASET PROFILING ENDPOINTS
 # ============================================
-
 
 
 # ===== PROJECT COLLABORATION & ACTIVITY =====
@@ -1210,19 +1461,19 @@ def get_eligibility_matrix():
 async def upload_dataset(file: UploadFile = File(...)):
     """Upload a dataset file"""
     import os
-    
+
     uploads_dir = "uploads"
     os.makedirs(uploads_dir, exist_ok=True)
-    
+
     file_path = os.path.join(uploads_dir, file.filename)
-    
+
     try:
         contents = await file.read()
         with open(file_path, "wb") as f:
             f.write(contents)
-        
+
         file_size_mb = len(contents) / (1024 * 1024)
-        
+
         return {
             "status": "success",
             "file_name": file.filename,
@@ -1239,51 +1490,59 @@ def validate_dataset(request: dict):
     project_id = request.get("project_id")
     dataset = request.get("dataset", {})
     constraints = request.get("constraints", {})
-    
+
     violations = []
     suggestions = []
     errors = []
-    
+
     # === CRITICAL VALIDATION CHECKS ===
-    
+
     # Check file_size_mb > 0 - if 0, file wasn't persisted correctly
     size_mb = dataset.get("size_mb", 0)
     if size_mb <= 0:
-        errors.append({
-            "code": "FILE_NOT_PERSISTED",
-            "message": "Dataset file size is 0. Please re-upload the file."
-        })
-    
+        errors.append(
+            {
+                "code": "FILE_NOT_PERSISTED",
+                "message": "Dataset file size is 0. Please re-upload the file.",
+            }
+        )
+
     # Check features == 0
     features = dataset.get("features", 0)
     if features == 0:
-        errors.append({
-            "code": "NO_FEATURES",
-            "message": "Dataset has 0 feature columns. Check header row or delimiter."
-        })
-    
+        errors.append(
+            {
+                "code": "NO_FEATURES",
+                "message": "Dataset has 0 feature columns. Check header row or delimiter.",
+            }
+        )
+
     # Relaxed PII check: only error if regulated compliance is required but PII detected
     pii_detected = dataset.get("pii_detected", False)
     compliance = constraints.get("compliance_level", "standard")
-    
+
     if pii_detected:
         if compliance in ["regulated", "highly_regulated"]:
-            errors.append({
-                "code": "PII_DETECTED",
-                "message": "PII detected. Compliance mode requires anonymization."
-            })
+            errors.append(
+                {
+                    "code": "PII_DETECTED",
+                    "message": "PII detected. Compliance mode requires anonymization.",
+                }
+            )
         else:
             # Just a violation/warning, not a blocking error
-            violations.append({
-                "constraint": "pii_detected",
-                "message": "PII detected in dataset. Proceed with caution.",
-                "severity": "soft"
-            })
+            violations.append(
+                {
+                    "constraint": "pii_detected",
+                    "message": "PII detected in dataset. Proceed with caution.",
+                    "severity": "soft",
+                }
+            )
 
     # Determine status
     is_valid = len(errors) == 0
     status = "approved" if is_valid else "blocked"
-    
+
     # Update project state
     if project_id and is_valid:
         project = ProjectStore.get(project_id)
@@ -1302,8 +1561,8 @@ def validate_dataset(request: dict):
         "pii_info": {
             "detected": pii_detected,
             "fields": dataset.get("pii_fields", []),
-            "compliance_required": compliance in ["regulated", "highly_regulated"]
-        }
+            "compliance_required": compliance in ["regulated", "highly_regulated"],
+        },
     }
 
 
@@ -1333,35 +1592,35 @@ def anonymize_pii(request: dict):
     """Anonymize PII columns in a dataset"""
     file_name = request.get("file_name")
     pii_fields = request.get("pii_fields", [])
-    
+
     if not file_name:
         raise HTTPException(status_code=400, detail="file_name is required")
-    
+
     if not pii_fields:
         return {"status": "success", "message": "No PII fields to anonymize"}
-    
+
     import os
     import pandas as pd
-    
+
     # Find the file
     possible_paths = [
         os.path.join("uploads", file_name),
         os.path.join(os.getcwd(), "uploads", file_name),
         file_name,
     ]
-    
+
     upload_path = None
     for p in possible_paths:
         if os.path.exists(p):
             upload_path = p
             break
-    
+
     if not upload_path or not os.path.exists(upload_path):
         raise HTTPException(status_code=404, detail=f"File {file_name} not found")
-    
+
     try:
         df = pd.read_csv(upload_path)
-        
+
         # Anonymize PII columns
         anonymized_columns = []
         for col in pii_fields:
@@ -1369,19 +1628,19 @@ def anonymize_pii(request: dict):
                 # Replace with hash or generic value
                 df[col] = df[col].apply(lambda x: f"REDACTED_{col.upper()}_{hash(str(x)) % 10000}")
                 anonymized_columns.append(col)
-        
+
         # Save the anonymized file
         anonymized_path = upload_path.replace(".csv", "_anonymized.csv")
         df.to_csv(anonymized_path, index=False)
-        
+
         return {
             "status": "success",
             "original_file": file_name,
             "anonymized_file": os.path.basename(anonymized_path),
             "anonymized_columns": anonymized_columns,
-            "message": f"Anonymized {len(anonymized_columns)} columns"
+            "message": f"Anonymized {len(anonymized_columns)} columns",
         }
-        
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to anonymize: {str(e)}")
 
@@ -1389,6 +1648,7 @@ def anonymize_pii(request: dict):
 # ============================================
 # TRAINING EXECUTION ENDPOINTS
 # ============================================
+
 
 class TrainingRequest(BaseModel):
     pipeline_id: str
@@ -1417,13 +1677,13 @@ class TrainingStatus(BaseModel):
 training_runs: dict = {}
 
 
-@app.post("/api/training/start")
-def start_training(request: TrainingRequest):
+@app.post("/api/training/run/start")
+def start_training_run(request: TrainingRequest):
     """Start a training run"""
     import uuid
-    
+
     run_id = str(uuid.uuid4())[:12]
-    
+
     training_runs[run_id] = {
         "run_id": run_id,
         "pipeline_id": request.pipeline_id,
@@ -1439,31 +1699,27 @@ def start_training(request: TrainingRequest):
         "estimated_cost": request.estimated_cost,
         "estimated_carbon": request.estimated_carbon,
     }
-    
-    return {
-        "run_id": run_id,
-        "status": "started",
-        "message": "Training started successfully"
-    }
+
+    return {"run_id": run_id, "status": "started", "message": "Training started successfully"}
 
 
-@app.get("/api/training/{run_id}")
+@app.get("/api/training/run/{run_id}")
 def get_training_status(run_id: str):
     """Get training run status"""
     if run_id not in training_runs:
         raise HTTPException(status_code=404, detail="Training run not found")
-    
+
     run = training_runs[run_id]
-    
+
     # Simulate progress
     if run["status"] == "running":
         run["progress"] = min(run["progress"] + random.uniform(0.05, 0.15), 1.0)
         run["elapsed_time_seconds"] += int(random.uniform(5, 15))
-        
+
         progress_factor = run["progress"]
         run["cost_spent"] = run["estimated_cost"] * progress_factor
         run["carbon_used"] = run["estimated_carbon"] * progress_factor
-        
+
         # Update current step
         if run["progress"] < 0.3:
             run["current_step"] = "preprocessing"
@@ -1473,27 +1729,31 @@ def get_training_status(run_id: str):
             run["current_step"] = "evaluating"
         else:
             run["current_step"] = "finalizing"
-        
+
         # Check constraint violations
         violations = []
         if run["cost_spent"] > run["constraints"]["max_cost_usd"]:
-            violations.append({
-                "constraint": "max_cost_usd",
-                "message": f"Cost ${run['cost_spent']:.2f} exceeded limit ${run['constraints']['max_cost_usd']}",
-                "value": run["cost_spent"],
-                "limit": run["constraints"]["max_cost_usd"]
-            })
-        
+            violations.append(
+                {
+                    "constraint": "max_cost_usd",
+                    "message": f"Cost ${run['cost_spent']:.2f} exceeded limit ${run['constraints']['max_cost_usd']}",
+                    "value": run["cost_spent"],
+                    "limit": run["constraints"]["max_cost_usd"],
+                }
+            )
+
         if run["carbon_used"] > run["constraints"]["max_carbon_kg"]:
-            violations.append({
-                "constraint": "max_carbon_kg",
-                "message": f"Carbon {run['carbon_used']:.4f}kg exceeded limit {run['constraints']['max_carbon_kg']}kg",
-                "value": run["carbon_used"],
-                "limit": run["constraints"]["max_carbon_kg"]
-            })
-        
+            violations.append(
+                {
+                    "constraint": "max_carbon_kg",
+                    "message": f"Carbon {run['carbon_used']:.4f}kg exceeded limit {run['constraints']['max_carbon_kg']}kg",
+                    "value": run["carbon_used"],
+                    "limit": run["constraints"]["max_carbon_kg"],
+                }
+            )
+
         run["constraint_violations"] = violations
-        
+
         # Complete if 100% or violated
         if run["progress"] >= 1.0:
             run["status"] = "completed"
@@ -1512,31 +1772,30 @@ def get_training_status(run_id: str):
         elif len(violations) > 0:
             run["status"] = "cancelled"
             run["artifacts"] = None
-    
+
     return {"run": run}
 
 
-@app.post("/api/training/{run_id}/stop")
+@app.post("/api/training/run/{run_id}/stop")
 def stop_training(run_id: str):
     """Stop a training run"""
     if run_id not in training_runs:
         raise HTTPException(status_code=404, detail="Training run not found")
-    
+
     training_runs[run_id]["status"] = "cancelled"
-    
-    return {
-        "status": "stopped",
-        "message": "Training run stopped successfully"
-    }
+
+    return {"status": "stopped", "message": "Training run stopped successfully"}
 
 
 # Lazy-loaded agent
 _design_agent = None
 
+
 def get_design_agent():
     global _design_agent
     if _design_agent is None:
         from agent.planner import DesignAgent
+
         _design_agent = DesignAgent()
     return _design_agent
 
@@ -1547,84 +1806,102 @@ async def get_ai_suggestions(project_id: str):
     project = ProjectStore.get(project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    
+
     # Analyze profile for smarter suggestions
     profile = project.profile_info or {}
-    type_ = profile.get('type', 'tabular')
-    rows = profile.get('rows', 1)
-    missing_pct = profile.get('missing_percentage', 0.0)
-    pii = profile.get('pii_detected', False)
-    
+    type_ = profile.get("type", "tabular")
+    rows = profile.get("rows", 1)
+    missing_pct = profile.get("missing_percentage", 0.0)
+    pii = profile.get("pii_detected", False)
+
     suggestions = []
-    
+
     # 1. Budget Suggestions
     if rows > 500000:
-        suggestions.append({
-            "field": "maxCostUsd",
-            "value": 100,
-            "reason": f"Large dataset ({rows:,} rows). Higher budget recommended for comprehensive search."
-        })
+        suggestions.append(
+            {
+                "field": "maxCostUsd",
+                "value": 100,
+                "reason": f"Large dataset ({rows:,} rows). Higher budget recommended for comprehensive search.",
+            }
+        )
     elif rows < 1000:
-        suggestions.append({
-            "field": "maxCostUsd",
-            "value": 5,
-            "reason": "Small dataset. Minimal compute cost expected."
-        })
+        suggestions.append(
+            {
+                "field": "maxCostUsd",
+                "value": 5,
+                "reason": "Small dataset. Minimal compute cost expected.",
+            }
+        )
     else:
-        suggestions.append({
-            "field": "maxCostUsd",
-            "value": 25,
-            "reason": "Standard budget appropriate for this dataset size."
-        })
-        
+        suggestions.append(
+            {
+                "field": "maxCostUsd",
+                "value": 25,
+                "reason": "Standard budget appropriate for this dataset size.",
+            }
+        )
+
     # 2. Latency Suggestions
-    if type_ == 'image':
-        suggestions.append({
-            "field": "maxLatencyMs",
-            "value": 500,
-            "reason": "Computer vision models typically require higher latency limits."
-        })
-    elif type_ == 'text':
-        suggestions.append({
-            "field": "maxLatencyMs",
-            "value": 250,
-            "reason": "NLP models often involve tokenization overhead."
-        })
+    if type_ == "image":
+        suggestions.append(
+            {
+                "field": "maxLatencyMs",
+                "value": 500,
+                "reason": "Computer vision models typically require higher latency limits.",
+            }
+        )
+    elif type_ == "text":
+        suggestions.append(
+            {
+                "field": "maxLatencyMs",
+                "value": 250,
+                "reason": "NLP models often involve tokenization overhead.",
+            }
+        )
     else:
-        suggestions.append({
-            "field": "maxLatencyMs",
-            "value": 100,
-            "reason": "Tabular models can easily meet low latency targets."
-        })
-    
+        suggestions.append(
+            {
+                "field": "maxLatencyMs",
+                "value": 100,
+                "reason": "Tabular models can easily meet low latency targets.",
+            }
+        )
+
     # 3. Compliance & Governance
     if pii:
-         suggestions.append({
-            "field": "complianceLevel",
-            "value": "regulated",
-            "reason": "PII detected in dataset. Setting to 'regulated' ensures audit logging and PII masking."
-        })
-    
+        suggestions.append(
+            {
+                "field": "complianceLevel",
+                "value": "regulated",
+                "reason": "PII detected in dataset. Setting to 'regulated' ensures audit logging and PII masking.",
+            }
+        )
+
     # 4. Objective Suggestions
     if missing_pct > 5.0:
-        suggestions.append({
-            "field": "objective",
-            "value": "robustness",
-            "reason": f"High missing values ({missing_pct}%). Optimizing for robustness is recommended."
-        })
-    
+        suggestions.append(
+            {
+                "field": "objective",
+                "value": "robustness",
+                "reason": f"High missing values ({missing_pct}%). Optimizing for robustness is recommended.",
+            }
+        )
+
     duration = (datetime.utcnow() - start_time).total_seconds()
     print(f"AI Suggestions for {project_id} took {duration:.4f}s")
-    
+
     return {"suggestions": suggestions}
 
 
 # ===== GROQ LLM PIPELINE DESIGN =====
 
+
 class GroqDesignRequest(BaseModel):
     dataset_profile: Dict[str, Any]
     constraints: Dict[str, Any]
     infra_context: Optional[Dict[str, Any]] = None
+
 
 class GroqExplainRequest(BaseModel):
     pipeline_dsl: Dict[str, Any]
@@ -1644,6 +1921,7 @@ def groq_design_pipeline(request: GroqDesignRequest):
 
     try:
         from agent.groq_service import GroqDesignOrchestrator
+
         orchestrator = GroqDesignOrchestrator(api_key=groq_key)
         result = orchestrator.run(
             dataset_profile=request.dataset_profile,
@@ -1659,7 +1937,7 @@ def groq_design_pipeline(request: GroqDesignRequest):
             type_="ai_design",
             title=f"Groq AI Pipeline Design ({status})",
             description=f"Elapsed: {result.get('elapsed_seconds', 0)}s | Issues: {issues_count}",
-            severity="low" if status == "success" else "high"
+            severity="low" if status == "success" else "high",
         )
 
         return result
@@ -1685,6 +1963,7 @@ def groq_explain_pipeline(request: GroqExplainRequest):
 
     try:
         from agent.groq_service import GroqExplainAgent
+
         agent = GroqExplainAgent(api_key=groq_key)
         result = agent.explain(
             pipeline_dsl=request.pipeline_dsl,
@@ -1702,6 +1981,7 @@ def groq_explain_pipeline(request: GroqExplainRequest):
 # COLAB TRAINING ENDPOINTS
 # ============================================
 
+
 class ColabTrainingRequest(BaseModel):
     dataset_profile: dict
     training_target: dict
@@ -1713,10 +1993,11 @@ def create_colab_training(request: ColabTrainingRequest):
     """Create a new Colab training job"""
     try:
         from agent.colab_service import create_training_job
+
         result = create_training_job(
             dataset_profile=request.dataset_profile,
             training_target=request.training_target,
-            constraints=request.constraints
+            constraints=request.constraints,
         )
         return result
     except Exception as e:
@@ -1729,6 +2010,7 @@ def get_colab_job(job_id: str):
     """Get Colab job status"""
     try:
         from agent.colab_service import get_training_job
+
         result = get_training_job(job_id)
         if "error" in result:
             raise HTTPException(status_code=404, detail=result["error"])
@@ -1745,14 +2027,15 @@ def get_colab_notebook(job_id: str):
     """Get the generated Colab notebook JSON"""
     try:
         from agent.colab_service import get_training_job
+
         job = get_training_job(job_id)
         if "error" in job:
             raise HTTPException(status_code=404, detail=job["error"])
-        
+
         notebook = job.get("notebook_json")
         if not notebook:
             raise HTTPException(status_code=404, detail="Notebook not found")
-        
+
         return {"notebook": json.loads(notebook)}
     except HTTPException:
         raise
@@ -1763,12 +2046,14 @@ def get_colab_notebook(job_id: str):
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run("ui.api:app", host="0.0.0.0", port=8000, reload=True)
 
 
 # ============================================
 # REAL TRAINING EXECUTION ENDPOINTS
 # ============================================
+
 
 class RealTrainingRequest(BaseModel):
     dataset_profile: dict
@@ -1782,11 +2067,12 @@ def execute_training(request: RealTrainingRequest):
     """Execute real GPU training"""
     try:
         from agent.training_engine import execute_real_training
+
         result = execute_real_training(
             dataset_profile=request.dataset_profile,
             training_target=request.training_target,
             constraints=request.constraints,
-            execution_mode=request.execution_mode
+            execution_mode=request.execution_mode,
         )
         return result
     except Exception as e:
@@ -1799,6 +2085,7 @@ def get_training_job(job_id: str):
     """Get training job status"""
     try:
         from agent.training_engine import training_engine
+
         job = training_engine.get_job(job_id)
         if not job:
             raise HTTPException(status_code=404, detail="Job not found")
@@ -1815,6 +2102,7 @@ def get_gpu_status():
     """Check GPU availability"""
     try:
         from agent.training_engine import training_engine
+
         gpu = training_engine.check_gpu_available()
         return gpu
     except Exception as e:

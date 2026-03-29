@@ -24,7 +24,7 @@ export default function DesignPreferencesPage() {
   })
 
   useEffect(() => {
-    if (!canProceedToDesign) {
+    if (!canProceedToDesign()) {
       router.push('/datasets/new')
     }
   }, [canProceedToDesign, router])

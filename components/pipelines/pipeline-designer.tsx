@@ -584,12 +584,27 @@ export function PipelineDesigner({ initialNodes = [], initialEdges = [], onSave 
     }
   }
 
+  if (!mounted) {
+    return (
+      <div className="flex h-full gap-6">
+        <div className="flex-1 rounded-2xl border border-neutral-800 bg-neutral-900/50 backdrop-blur-xl p-4 overflow-hidden">
+          <div className="flex items-center justify-center h-full">
+            <div className="text-neutral-500">Loading pipeline designer...</div>
+          </div>
+        </div>
+        <div className="w-96 rounded-2xl border border-neutral-800 bg-neutral-900/50 backdrop-blur-xl p-6">
+          <div className="flex items-center justify-center h-full">
+            <div className="text-neutral-500">Properties</div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="flex h-full gap-6">
       {/* Canvas Area */}
       <div className="flex-1 rounded-2xl border border-neutral-800 bg-neutral-900/50 backdrop-blur-xl p-4 overflow-hidden relative">
-        {/* Toolbar */}
-        <div className="absolute top-4 left-4 right-4 flex items-center justify-between z-10">
           <div className="flex items-center gap-2">
             <Button size="sm" variant="outline" onClick={() => setShowAddMenu(!showAddMenu)} className="border-neutral-700 bg-neutral-800/80">
               <Plus className="w-4 h-4 mr-2" /> Add Node
@@ -639,36 +654,17 @@ export function PipelineDesigner({ initialNodes = [], initialEdges = [], onSave 
             </div>
           ) : (
             <>
-              {/* Connections */}
               <svg className="absolute inset-0 w-full h-full pointer-events-none">
                 {edges.map((edge) => {
                   const source = nodes.find(n => n.id === edge.source)
                   const target = nodes.find(n => n.id === edge.target)
                   if (!source || !target) return null
-  if (!mounted) {
-    return (
-      <div className="flex h-full gap-6">
-        <div className="flex-1 rounded-2xl border border-neutral-800 bg-neutral-900/50 backdrop-blur-xl p-4 overflow-hidden">
-          <div className="flex items-center justify-center h-full">
-            <div className="text-neutral-500">Loading pipeline designer...</div>
-          </div>
-        </div>
-        <div className="w-96 rounded-2xl border border-neutral-800 bg-neutral-900/50 backdrop-blur-xl p-6">
-          <div className="flex items-center justify-center h-full">
-            <div className="text-neutral-500">Properties</div>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  return (
+                    return (
                     <path key={edge.id} d={`M ${source.position.x + 100} ${source.position.y + 40} C ${source.position.x + 150} ${source.position.y + 40}, ${target.position.x - 50} ${target.position.y + 40}, ${target.position.x} ${target.position.y + 40}`} stroke="#6b8ef4" strokeWidth="2" fill="none" className="opacity-50" />
                   )
                 })}
               </svg>
 
-              {/* Nodes */}
               {nodes.map((node) => {
                 const template = NODE_TEMPLATES[node.type]
                 const Icon = template.icon
@@ -677,7 +673,7 @@ export function PipelineDesigner({ initialNodes = [], initialEdges = [], onSave 
                 return (
                   <div key={node.id} onClick={() => setSelectedNodeId(node.id)} style={{ left: `${node.position.x}px`, top: `${node.position.y}px` }} className={cn('absolute w-44 rounded-xl border-2 p-3 cursor-pointer transition-all hover:scale-105', template.color, isSelected ? 'ring-2 ring-white ring-offset-2 ring-offset-neutral-950 shadow-xl' : '')}>
                     <div className="flex items-center gap-2 mb-1">
-                      <Icon className="w-4 h-4 text-white" />
+                      <Icon className="w-4 h-4" />
                       <div className="font-bold text-sm truncate text-white">{node.name}</div>
                     </div>
                     <div className="text-xs opacity-90 truncate text-white/80">{template.label}</div>
@@ -687,7 +683,6 @@ export function PipelineDesigner({ initialNodes = [], initialEdges = [], onSave 
             </>
           )}
         </div>
-      </div>
 
       {/* Sidebar */}
       <div className="w-96 rounded-2xl border border-neutral-800 bg-neutral-900/50 backdrop-blur-xl p-6 flex flex-col overflow-y-auto">

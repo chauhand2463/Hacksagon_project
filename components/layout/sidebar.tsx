@@ -29,6 +29,7 @@ import {
   Cpu,
   Check,
   X,
+  FlaskConical,
 } from 'lucide-react'
 import { useAuth } from '@/hooks/use-auth'
 import { useWorkflow, LifecycleState } from '@/hooks/use-workflow'
@@ -65,6 +66,7 @@ function SidebarComponent() {
     { label: 'Runs', href: '/runs', icon: Activity, color: 'text-emerald-400' },
     { label: 'Failures', href: '/failures', icon: AlertCircle, color: 'text-red-400' },
     { label: 'AI Architect', href: '/design/ai-architect', icon: Sparkles, color: 'text-cyan-400' },
+    { label: 'Fine-Tuning', href: '/finetuning', icon: FlaskConical, color: 'text-pink-400' },
     { label: 'Approvals', href: '/approvals', icon: CheckCircle2, color: 'text-green-400' },
   ]
 
