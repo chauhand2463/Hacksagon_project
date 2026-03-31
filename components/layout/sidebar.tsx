@@ -109,8 +109,8 @@ function SidebarComponent() {
       {/* Logo */}
       <div className="relative p-5 border-b border-white/5">
         <Link href="/" className="flex items-center gap-3 group">
-          <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-brand-500 via-brand-600 to-brand-400 flex items-center justify-center shadow-lg shadow-brand-500/30 group-hover:shadow-brand-500/50 transition-all duration-500 group-hover:scale-110 group-hover:rotate-3">
-            <Sparkles className="w-5 h-5 text-white" />
+          <div className="w-11 h-11 relative overflow-hidden group-hover:scale-105 transition-transform duration-500">
+            <img src="/logo.png" alt="System2ML Logo" className="w-full h-full object-contain" />
           </div>
           <div>
             <span className="font-bold text-white text-lg block tracking-tight">System2ML</span>

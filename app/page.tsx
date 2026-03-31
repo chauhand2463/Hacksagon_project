@@ -21,8 +21,8 @@ export default function LandingPage() {
       <nav className="fixed top-0 left-0 right-0 z-50 flex items-center justify-between px-8 py-6 bg-black/50 backdrop-blur-md border-b border-white/5">
         {/* Logo */}
         <div className="flex items-center gap-2">
-          <div className="w-5 h-5 bg-white rounded-sm transform rotate-45" />
-          <div className="w-5 h-5 bg-brand-500 rounded-sm transform rotate-45 -ml-3 mix-blend-screen" />
+          <img src="/logo.png" alt="System2ML Logo" className="w-8 h-8 object-contain" />
+          <span className="text-xl font-bold tracking-tighter text-white">SYSTEM2ML</span>
         </div>
 
         {/* Center Links */}
@@ -322,8 +322,7 @@ export default function LandingPage() {
 
           <div className="lg:col-span-2">
             <div className="flex items-center gap-2 mb-8">
-              <div className="w-6 h-6 bg-white rounded-sm transform rotate-45" />
-              <div className="w-6 h-6 bg-brand-500 rounded-sm transform rotate-45 -ml-4 mix-blend-screen" />
+              <img src="/logo.png" alt="System2ML Logo" className="w-8 h-8 object-contain" />
               <span className="text-2xl font-bold tracking-tighter ml-2 text-white">SYSTEM2ML</span>
             </div>
             <p className="text-[#a0a0a0] font-light leading-relaxed mb-8 max-w-sm">
