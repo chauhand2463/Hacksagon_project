@@ -60,6 +60,7 @@ try:
     from slowapi import Limiter
     from slowapi.util import get_remote_address
     from slowapi.errors import RateLimitExceeded
+    from starlette.requests import Request
 
     HAS_RATE_LIMITING = True
     limiter = Limiter(key_func=get_remote_address)
@@ -126,7 +127,10 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     )
 
 
-cors_origins = os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(",")
+cors_origins = os.environ.get(
+    "CORS_ORIGINS",
+    "http://localhost:3000,http://127.0.0.1:3000,http://localhost:8000,http://127.0.0.1:8000",
+).split(",")
 
 app.add_middleware(
     CORSMiddleware,
@@ -178,14 +182,14 @@ class AuthResponse(BaseModel):
 
 @app.post("/api/auth/register", response_model=AuthResponse)
 @limiter.limit("5/minute") if HAS_RATE_LIMITING else lambda x: x
-def register(request: RegisterRequest):
-    if not request.email or not request.password or not request.name:
+def register(request: Request, register_data: RegisterRequest):
+    if not register_data.email or not register_data.password or not register_data.name:
         raise HTTPException(status_code=400, detail="All fields are required")
 
-    if len(request.password) < 4:
+    if len(register_data.password) < 4:
         raise HTTPException(status_code=400, detail="Password must be at least 4 characters")
 
-    user = UserStore.create(request.email, request.password, request.name)
+    user = UserStore.create(register_data.email, register_data.password, register_data.name)
 
     if not user:
         raise HTTPException(status_code=400, detail="Email already exists")
@@ -590,9 +594,9 @@ class TrainingPlanRequest(BaseModel):
 
 @app.post("/api/training/plan")
 @limiter.limit("20/minute") if HAS_RATE_LIMITING else lambda x: x
-def plan_training(request: TrainingPlanRequest):
+def plan_training(request: Request, training_data: TrainingPlanRequest):
     try:
-        project_id = request.project_id
+        project_id = training_data.project_id
         if not project_id:
             all_projects = ProjectStore.get_all()
             if all_projects:
@@ -853,11 +857,11 @@ def complete_training(project_id: str, metrics: Optional[Dict[str, Any]] = None)
 
 @app.post("/api/auth/login", response_model=AuthResponse)
 @limiter.limit("10/minute") if HAS_RATE_LIMITING else lambda x: x
-def login(request: LoginRequest):
-    if not request.email or not request.password:
+def login(request: Request, login_data: LoginRequest):
+    if not login_data.email or not login_data.password:
         raise HTTPException(status_code=400, detail="Email and password are required")
 
-    user = UserStore.verify_login(request.email, request.password)
+    user = UserStore.verify_login(login_data.email, login_data.password)
 
     if not user:
         raise HTTPException(status_code=401, detail="Invalid email or password")
@@ -955,25 +959,25 @@ def health_check():
 
 @app.post("/api/design/request")
 @limiter.limit("10/minute") if HAS_RATE_LIMITING else lambda x: x
-def design_pipeline(request: DesignRequest):
+def design_pipeline(request: Request, request_data: DesignRequest):
     try:
         constraints = ConstraintSpec(
-            data_type=request.data_profile.type,
+            data_type=request_data.data_profile.type,
             task="classification",
-            objective=request.objective,
-            max_cost=request.constraints.max_cost_usd,
-            max_carbon=request.constraints.max_carbon_kg,
-            max_latency=request.constraints.max_latency_ms,
-            deployment=request.deployment,
-            compliance=request.constraints.compliance_level,
-            retraining=request.retraining,
+            objective=request_data.objective,
+            max_cost=request_data.constraints.max_cost_usd,
+            max_carbon=request_data.constraints.max_carbon_kg,
+            max_latency=request_data.constraints.max_latency_ms,
+            deployment=request_data.deployment,
+            compliance=request_data.constraints.compliance_level,
+            retraining=request_data.retraining,
         )
 
         agent = get_design_agent()
         result = agent.generate_designs(constraints)
 
         pipeline_id = str(uuid.uuid4())[:8]
-        name = request.name or f"Pipeline-{pipeline_id}"
+        name = request_data.name or f"Pipeline-{pipeline_id}"
 
         PipelineStore.create(
             pipeline_id=pipeline_id,
